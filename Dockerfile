@@ -22,7 +22,7 @@ COPY repository ./repository
 COPY router ./router
 COPY service ./service
 COPY main.go ./
-RUN go build -o /server .
+RUN go env -w GOPROXY=https://goproxy.cn,direct && go build -o /server .
 
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM oven/bun:1.3.13
@@ -33,7 +33,17 @@ COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
 COPY --from=web-build /app/web /app/web
 ENV PROMPT_DATA_DIR=/app/data/prompts
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources; \
+    else \
+        sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list; \
+    fi && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /app/data/prompts
 
 EXPOSE 3000
