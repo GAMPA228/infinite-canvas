@@ -506,7 +506,7 @@ function ResultImageCard({
                     <span>{formatBytes(image.bytes)}</span>
                     <span>{formatDuration(image.durationMs)}</span>
                 </div>
-                <div className="flex shrink-0 gap-1">
+                <div className="flex min-w-0 max-w-full flex-wrap gap-1">
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)}>
                         添加到素材
                     </Button>
