@@ -19,15 +19,15 @@ func New() *gin.Engine {
 	api.POST("/auth/register", gin.WrapF(handler.Register))
 	api.POST("/auth/login", gin.WrapF(handler.Login))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
-	api.GET("/settings", gin.WrapF(handler.Settings))
-	api.POST("/v1/images/generations", gin.WrapF(handler.AIImagesGenerations))
-	api.POST("/v1/images/edits", gin.WrapF(handler.AIImagesEdits))
-	api.POST("/v1/chat/completions", gin.WrapF(handler.AIChatCompletions))
-	api.POST("/v1/videos", gin.WrapF(handler.AIVideos))
-	api.GET("/v1/videos/:id", func(c *gin.Context) {
+	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
+	api.POST("/v1/images/generations", middleware.OptionalAuth, gin.WrapF(handler.AIImagesGenerations))
+	api.POST("/v1/images/edits", middleware.OptionalAuth, gin.WrapF(handler.AIImagesEdits))
+	api.POST("/v1/chat/completions", middleware.OptionalAuth, gin.WrapF(handler.AIChatCompletions))
+	api.POST("/v1/videos", middleware.OptionalAuth, gin.WrapF(handler.AIVideos))
+	api.GET("/v1/videos/:id", middleware.OptionalAuth, func(c *gin.Context) {
 		handler.AIVideo(c.Writer, c.Request, c.Param("id"))
 	})
-	api.GET("/v1/videos/:id/content", func(c *gin.Context) {
+	api.GET("/v1/videos/:id/content", middleware.OptionalAuth, func(c *gin.Context) {
 		handler.AIVideoContent(c.Writer, c.Request, c.Param("id"))
 	})
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
@@ -37,8 +37,16 @@ func New() *gin.Engine {
 	admin := api.Group("/admin", middleware.AdminAuth)
 	admin.GET("/users", gin.WrapF(handler.AdminUsers))
 	admin.POST("/users", gin.WrapF(handler.AdminSaveUser))
+	admin.POST("/users/:id/credits", func(c *gin.Context) {
+		handler.AdminAdjustUserCredits(c.Writer, c.Request, c.Param("id"))
+	})
 	admin.DELETE("/users/:id", func(c *gin.Context) {
 		handler.AdminDeleteUser(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.GET("/credit-logs", gin.WrapF(handler.AdminCreditLogs))
+	admin.POST("/credit-logs", gin.WrapF(handler.AdminSaveCreditLog))
+	admin.DELETE("/credit-logs/:id", func(c *gin.Context) {
+		handler.AdminDeleteCreditLog(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/settings", gin.WrapF(handler.AdminSettings))
 	admin.POST("/settings", gin.WrapF(handler.AdminSaveSettings))

@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -19,6 +21,18 @@ type TokenClaims struct {
 	Username string         `json:"username"`
 	Role     model.UserRole `json:"role"`
 	jwt.RegisteredClaims
+}
+
+type safeMessageError struct {
+	message string
+}
+
+func (err safeMessageError) Error() string {
+	return err.message
+}
+
+func (err safeMessageError) SafeMessage() string {
+	return err.message
 }
 
 func EnsureDefaultAdmin() error {
@@ -45,33 +59,47 @@ func EnsureDefaultAdmin() error {
 	return err
 }
 
-func Register(username string, password string) (model.AuthSession, error) {
-	return model.AuthSession{}, errors.New("注册功能暂时关闭")
+func Register(username string, password string, inviteCode string) (model.AuthSession, error) {
 	username = strings.TrimSpace(username)
+	inviteCode = strings.TrimSpace(inviteCode)
 	if strings.ContainsAny(username, " \t\r\n") {
-		return model.AuthSession{}, errors.New("用户名不能包含空格")
+		return model.AuthSession{}, safeMessageError{message: "用户名不能包含空格"}
 	}
 	if username == "" || password == "" {
-		return model.AuthSession{}, errors.New("用户名和密码不能为空")
+		return model.AuthSession{}, safeMessageError{message: "用户名和密码不能为空"}
+	}
+	if inviteCode == "" {
+		return model.AuthSession{}, safeMessageError{message: "请填写邀请码"}
 	}
 	if _, ok, err := repository.GetUserByUsername(username); err != nil || ok {
 		if err != nil {
 			return model.AuthSession{}, err
 		}
-		return model.AuthSession{}, errors.New("用户名已存在")
+		return model.AuthSession{}, safeMessageError{message: "用户名已存在"}
+	}
+	inviteUser, ok, err := repository.GetUserByInviteCode(inviteCode)
+	if err != nil {
+		return model.AuthSession{}, err
+	}
+	if !ok || inviteUser.InviteUsedAt != "" {
+		return model.AuthSession{}, safeMessageError{message: "邀请码无效或已使用"}
+	}
+	if inviteUser.Username != "" || inviteUser.Password != "" {
+		return model.AuthSession{}, safeMessageError{message: "邀请码已绑定账号"}
 	}
 	hash, err := hashPassword(password)
 	if err != nil {
 		return model.AuthSession{}, err
 	}
-	user, err := repository.SaveUser(model.User{
-		ID:        newID("user"),
-		Username:  username,
-		Password:  hash,
-		Role:      model.UserRoleUser,
-		CreatedAt: now(),
-		UpdatedAt: now(),
-	})
+	inviteUser.Username = username
+	inviteUser.Password = hash
+	inviteUser.Role = normalizeUserRole(inviteUser.Role)
+	if inviteUser.Role == model.UserRoleAdmin {
+		inviteUser.Role = model.UserRoleUser
+	}
+	inviteUser.InviteUsedAt = now()
+	inviteUser.UpdatedAt = now()
+	user, err := repository.SaveUser(inviteUser)
 	if err != nil {
 		return model.AuthSession{}, err
 	}
@@ -128,19 +156,42 @@ func ListUsers(q model.Query) (model.UserList, error) {
 
 func SaveUser(user model.User, password string) (model.User, error) {
 	user.Username = strings.TrimSpace(user.Username)
+	user.ChannelName = strings.TrimSpace(user.ChannelName)
+	user.InviteCode = strings.TrimSpace(user.InviteCode)
 	if strings.ContainsAny(user.Username, " \t\r\n") {
-		return user, errors.New("用户名不能包含空格")
+		return user, safeMessageError{message: "用户名不能包含空格"}
 	}
-	if user.Username == "" {
-		return user, errors.New("用户名不能为空")
+	if user.Username == "" && user.InviteCode == "" {
+		return user, safeMessageError{message: "用户名和邀请码不能同时为空"}
 	}
-	if user.Role == "" || user.Role == model.UserRoleGuest {
-		user.Role = model.UserRoleUser
+	user.Role = normalizeUserRole(user.Role)
+	if user.Username != "" {
+		if saved, ok, err := repository.GetUserByUsername(user.Username); err != nil {
+			return user, err
+		} else if ok && saved.ID != user.ID {
+			return user, safeMessageError{message: "用户名已存在"}
+		}
 	}
-	if saved, ok, err := repository.GetUserByUsername(user.Username); err != nil {
-		return user, err
-	} else if ok && saved.ID != user.ID {
-		return user, errors.New("用户名已存在")
+	if user.InviteCode != "" {
+		if saved, ok, err := repository.GetUserByInviteCode(user.InviteCode); err != nil {
+			return user, err
+		} else if ok && saved.ID != user.ID {
+			return user, safeMessageError{message: "邀请码已存在"}
+		}
+	}
+	if user.ID != "" && user.Role != model.UserRoleAdmin {
+		if saved, ok, err := repository.GetUserByID(user.ID); err != nil {
+			return user, err
+		} else if ok && saved.Role == model.UserRoleAdmin {
+			if adminCount, err := repository.CountAdminsExcept(user.ID); err != nil {
+				return user, err
+			} else if adminCount == 0 {
+				return user, safeMessageError{message: "不能降级最后一个管理员"}
+			}
+		}
+	}
+	if user.ID == "" && user.InviteCode == "" {
+		user.InviteCode = newInviteCode()
 	}
 	if user.ID == "" {
 		user.ID = newID("user")
@@ -150,6 +201,16 @@ func SaveUser(user model.User, password string) (model.User, error) {
 	} else if ok {
 		user.CreatedAt = saved.CreatedAt
 		user.Password = saved.Password
+		user.Credits = saved.Credits
+		if user.InviteUsedAt == "" {
+			user.InviteUsedAt = saved.InviteUsedAt
+		}
+		if user.InviterID == "" {
+			user.InviterID = saved.InviterID
+		}
+	}
+	if user.Role != model.UserRoleVIP {
+		user.ChannelName = ""
 	}
 	if password != "" {
 		hash, err := hashPassword(password)
@@ -158,8 +219,11 @@ func SaveUser(user model.User, password string) (model.User, error) {
 		}
 		user.Password = hash
 	}
-	if user.Password == "" {
-		return user, errors.New("密码不能为空")
+	if user.Username == "" && user.Password != "" {
+		return user, safeMessageError{message: "只生成邀请码时不需要填写密码"}
+	}
+	if user.Username != "" && user.Password == "" {
+		return user, safeMessageError{message: "密码不能为空"}
 	}
 	user.UpdatedAt = now()
 	user, err := repository.SaveUser(user)
@@ -167,7 +231,121 @@ func SaveUser(user model.User, password string) (model.User, error) {
 	return user, err
 }
 
+func AdjustUserCredits(id string, credits int) (model.User, error) {
+	if credits < 0 {
+		credits = 0
+	}
+	user, ok, err := repository.GetUserByID(id)
+	if err != nil || !ok {
+		if err != nil {
+			return user, err
+		}
+		return user, safeMessageError{message: "用户不存在"}
+	}
+	oldCredits := user.Credits
+	user.Credits = credits
+	user.UpdatedAt = now()
+	user, err = repository.SaveUser(user)
+	if err == nil && oldCredits != credits {
+		_, err = repository.SaveCreditLog(model.CreditLog{
+			ID:        newID("credit"),
+			UserID:    user.ID,
+			Type:      model.CreditLogTypeAdminAdjust,
+			Amount:    credits - oldCredits,
+			Balance:   credits,
+			Remark:    "后台手动调整",
+			CreatedAt: now(),
+		})
+	}
+	user.Password = ""
+	return user, err
+}
+
+func ConsumeUserCredits(userID string, modelName string, credits int, path string) error {
+	if credits <= 0 {
+		return nil
+	}
+	user, ok, err := repository.ConsumeUserCredits(userID, credits, now())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return safeMessageError{message: "算力点不足"}
+	}
+	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
+	_, err = repository.SaveCreditLog(model.CreditLog{
+		ID:        newID("credit"),
+		UserID:    userID,
+		Type:      model.CreditLogTypeAIConsume,
+		Amount:    -credits,
+		Balance:   user.Credits,
+		Remark:    "调用模型 " + modelName,
+		Extra:     string(extra),
+		CreatedAt: now(),
+	})
+	return err
+}
+
+func RefundUserCredits(userID string, modelName string, credits int, path string) error {
+	if credits <= 0 {
+		return nil
+	}
+	user, ok, err := repository.RefundUserCredits(userID, credits, now())
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return safeMessageError{message: "用户不存在"}
+	}
+	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
+	_, err = repository.SaveCreditLog(model.CreditLog{
+		ID:        newID("credit"),
+		UserID:    userID,
+		Type:      model.CreditLogTypeAIRefund,
+		Amount:    credits,
+		Balance:   user.Credits,
+		Remark:    "模型调用失败返还 " + modelName,
+		Extra:     string(extra),
+		CreatedAt: now(),
+	})
+	return err
+}
+
+func ListCreditLogs(q model.Query) (model.CreditLogList, error) {
+	logs, total, err := repository.ListCreditLogs(q)
+	if err != nil {
+		return model.CreditLogList{}, err
+	}
+	return model.CreditLogList{Items: logs, Total: int(total)}, nil
+}
+
+func SaveCreditLog(log model.CreditLog) (model.CreditLog, error) {
+	if log.ID == "" {
+		log.ID = newID("credit")
+		log.CreatedAt = now()
+	}
+	return repository.SaveCreditLog(log)
+}
+
+func DeleteCreditLog(id string) error {
+	return repository.DeleteCreditLog(id)
+}
+
 func DeleteUser(id string) error {
+	user, ok, err := repository.GetUserByID(id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	if user.Role == model.UserRoleAdmin {
+		if adminCount, err := repository.CountAdminsExcept(id); err != nil {
+			return err
+		} else if adminCount == 0 {
+			return safeMessageError{message: "不能删除最后一个管理员"}
+		}
+	}
 	return repository.DeleteUser(id)
 }
 
@@ -212,6 +390,30 @@ func now() string {
 
 func newID(prefix string) string {
 	return prefix + "-" + uuid.NewString()
+}
+
+func normalizeUserRole(role model.UserRole) model.UserRole {
+	switch role {
+	case model.UserRoleAdmin, model.UserRoleVIP, model.UserRoleUser:
+		return role
+	default:
+		return model.UserRoleUser
+	}
+}
+
+func newInviteCode() string {
+	const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	for {
+		var builder strings.Builder
+		builder.Grow(10)
+		for i := 0; i < 10; i++ {
+			builder.WriteByte(letters[rand.IntN(len(letters))])
+		}
+		code := builder.String()
+		if _, ok, err := repository.GetUserByInviteCode(code); err == nil && !ok {
+			return code
+		}
+	}
 }
 
 func WarnDefaultSecurityConfig() {

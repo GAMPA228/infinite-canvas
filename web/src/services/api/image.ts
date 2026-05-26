@@ -3,6 +3,7 @@ import axios from "axios";
 import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
+import { AUTH_TOKEN_KEY } from "@/services/api/auth";
 import { imageToDataUrl } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
 
@@ -72,19 +73,45 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
 }
 
+function imageSizeByQuality(size?: string, quality?: string) {
+    const value = (size || "auto").trim().toLowerCase();
+    if (/^\d+x\d+$/.test(value)) return value;
+    const [rawAspect] = value.split("-");
+    const aspect = value === "auto" || !value ? "1:1" : rawAspect;
+    const tier = quality === "high" ? "4k" : quality === "medium" ? "2k" : "1k";
+    const sizes: Record<string, Record<string, string>> = {
+        "1k": { "1:1": "1024x1024", "3:2": "1536x1024", "2:3": "1024x1536", "4:3": "1344x1024", "3:4": "1024x1344", "16:9": "1536x864", "9:16": "864x1536" },
+        "2k": { "1:1": "2048x2048", "3:2": "2048x1365", "2:3": "1365x2048", "4:3": "2048x1536", "3:4": "1536x2048", "16:9": "2048x1152", "9:16": "1152x2048" },
+        "4k": { "1:1": "4096x4096", "3:2": "3840x2560", "2:3": "2560x3840", "4:3": "3840x2880", "3:4": "2880x3840", "16:9": "3840x2160", "9:16": "2160x3840" },
+    };
+    return sizes[tier]?.[aspect] || size || "1024x1024";
+}
+
 function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {
     return config.channelMode === "remote"
-        ? contentType
-            ? { "Content-Type": contentType }
-            : undefined
+        ? {
+              ...authHeader(),
+              ...(contentType ? { "Content-Type": contentType } : {}),
+          }
         : {
               Authorization: `Bearer ${config.apiKey}`,
               ...(contentType ? { "Content-Type": contentType } : {}),
           };
+}
+
+function authHeader() {
+    if (typeof window === "undefined") return {};
+    let token = "";
+    try {
+        token = JSON.parse(window.localStorage.getItem(AUTH_TOKEN_KEY) || "{}")?.state?.token || "";
+    } catch {
+        token = "";
+    }
+    return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) {
@@ -102,7 +129,7 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
                 prompt: withSystemPrompt(config, prompt),
                 n,
                 quality: config.quality || undefined,
-                size: config.size || undefined,
+                size: imageSizeByQuality(config.size, config.quality),
                 response_format: "b64_json",
             },
             {
@@ -125,9 +152,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     if (config.quality) {
         formData.set("quality", config.quality);
     }
-    if (config.size) {
-        formData.set("size", config.size);
-    }
+    formData.set("size", imageSizeByQuality(config.size, config.quality));
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
 

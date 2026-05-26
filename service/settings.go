@@ -15,8 +15,32 @@ import (
 )
 
 func PublicSettings() (model.PublicSetting, error) {
+	return PublicSettingsForUser(model.AuthUser{})
+}
+
+func PublicSettingsForUser(user model.AuthUser) (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
-	return normalizePublicSetting(settings.Public), err
+	if err != nil {
+		return model.PublicSetting{}, err
+	}
+	public := normalizePublicSetting(settings.Public)
+	if user.ID == "" || user.Role != model.UserRoleVIP {
+		return public, nil
+	}
+	savedUser, ok, err := repository.GetUserByID(user.ID)
+	if err != nil {
+		return model.PublicSetting{}, err
+	}
+	if !ok || strings.TrimSpace(savedUser.ChannelName) == "" {
+		return public, nil
+	}
+	for _, channel := range normalizePrivateSetting(settings.Private).Channels {
+		if channel.Enabled && channel.Name == savedUser.ChannelName {
+			applyUserChannelModels(&public.ModelChannel, channel.Models)
+			return public, nil
+		}
+	}
+	return public, nil
 }
 
 func AdminSettings() (model.Settings, error) {
@@ -64,11 +88,81 @@ func normalizePublicSetting(setting model.PublicSetting) model.PublicSetting {
 	if setting.ModelChannel.AvailableModels == nil {
 		setting.ModelChannel.AvailableModels = []string{}
 	}
+	if setting.ModelChannel.ModelCosts == nil {
+		setting.ModelChannel.ModelCosts = []model.ModelCost{}
+	}
+	for i := range setting.ModelChannel.ModelCosts {
+		setting.ModelChannel.ModelCosts[i].Model = strings.TrimSpace(setting.ModelChannel.ModelCosts[i].Model)
+		if setting.ModelChannel.ModelCosts[i].Credits < 0 {
+			setting.ModelChannel.ModelCosts[i].Credits = 0
+		}
+		if setting.ModelChannel.ModelCosts[i].ImageCredits1K < 0 {
+			setting.ModelChannel.ModelCosts[i].ImageCredits1K = 0
+		}
+		if setting.ModelChannel.ModelCosts[i].ImageCredits2K < 0 {
+			setting.ModelChannel.ModelCosts[i].ImageCredits2K = 0
+		}
+		if setting.ModelChannel.ModelCosts[i].ImageCredits4K < 0 {
+			setting.ModelChannel.ModelCosts[i].ImageCredits4K = 0
+		}
+		if setting.ModelChannel.ModelCosts[i].Credits > 0 {
+			if setting.ModelChannel.ModelCosts[i].ImageCredits1K <= 0 {
+				setting.ModelChannel.ModelCosts[i].ImageCredits1K = setting.ModelChannel.ModelCosts[i].Credits
+			}
+			if setting.ModelChannel.ModelCosts[i].ImageCredits2K <= 0 {
+				setting.ModelChannel.ModelCosts[i].ImageCredits2K = setting.ModelChannel.ModelCosts[i].Credits
+			}
+			if setting.ModelChannel.ModelCosts[i].ImageCredits4K <= 0 {
+				setting.ModelChannel.ModelCosts[i].ImageCredits4K = setting.ModelChannel.ModelCosts[i].Credits
+			}
+		}
+	}
 	if setting.ModelChannel.AllowCustomChannel == nil {
 		enabled := true
 		setting.ModelChannel.AllowCustomChannel = &enabled
 	}
 	return setting
+}
+
+func ModelCost(modelName string) (int, error) {
+	return ModelCostByTier(modelName, "")
+}
+
+func ModelCostByTier(modelName string, tier string) (int, error) {
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return 0, err
+	}
+	modelName = strings.TrimSpace(modelName)
+	for _, item := range normalizePublicSetting(settings.Public).ModelChannel.ModelCosts {
+		if item.Model == modelName {
+			switch strings.ToLower(strings.TrimSpace(tier)) {
+			case "1k":
+				return modelCostByTier(item.ImageCredits1K, 1), nil
+			case "2k":
+				return modelCostByTier(item.ImageCredits2K, 2), nil
+			case "4k":
+				return modelCostByTier(item.ImageCredits4K, 3), nil
+			}
+			return item.Credits, nil
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(tier)) {
+	case "1k":
+		return 1, nil
+	case "2k":
+		return 2, nil
+	case "4k":
+		return 3, nil
+	}
+	return 0, nil
+}
+
+func modelCostByTier(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting {
@@ -82,6 +176,9 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		}
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
+		}
+		if setting.Channels[i].Mode == "" {
+			setting.Channels[i].Mode = "openai"
 		}
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
@@ -143,6 +240,88 @@ func SelectModelChannel(modelName string) (model.ModelChannel, error) {
 	return channels[0], nil
 }
 
+func applyUserChannelModels(setting *model.PublicModelChannelSetting, models []string) {
+	nextModels := make([]string, 0, len(models))
+	seen := map[string]bool{}
+	for _, modelName := range models {
+		modelName = strings.TrimSpace(modelName)
+		if modelName == "" || seen[modelName] {
+			continue
+		}
+		nextModels = append(nextModels, modelName)
+		seen[modelName] = true
+	}
+	if len(nextModels) == 0 {
+		return
+	}
+	setting.AvailableModels = nextModels
+	if !stringInSlice(setting.DefaultModel, nextModels) {
+		setting.DefaultModel = nextModels[0]
+	}
+	if !stringInSlice(setting.DefaultImageModel, nextModels) {
+		setting.DefaultImageModel = firstModelByKeyword(nextModels, []string{"image", "img", "gpt-image"}, setting.DefaultModel)
+	}
+	if !stringInSlice(setting.DefaultVideoModel, nextModels) {
+		setting.DefaultVideoModel = firstModelByKeyword(nextModels, []string{"sora", "video"}, setting.DefaultModel)
+	}
+	if !stringInSlice(setting.DefaultTextModel, nextModels) {
+		setting.DefaultTextModel = firstModelByKeyword(nextModels, []string{"gpt", "claude", "gemini", "codex"}, setting.DefaultModel)
+	}
+}
+
+func firstModelByKeyword(models []string, keywords []string, fallback string) string {
+	for _, keyword := range keywords {
+		for _, modelName := range models {
+			if strings.Contains(strings.ToLower(modelName), keyword) {
+				return modelName
+			}
+		}
+	}
+	if stringInSlice(fallback, models) {
+		return fallback
+	}
+	return models[0]
+}
+
+func stringInSlice(value string, items []string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item) == value {
+			return true
+		}
+	}
+	return false
+}
+
+func SelectUserModelChannel(user model.AuthUser, modelName string) (model.ModelChannel, error) {
+	if user.ID == "" || user.Role != model.UserRoleVIP {
+		return SelectModelChannel(modelName)
+	}
+	savedUser, ok, err := repository.GetUserByID(user.ID)
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	if !ok || strings.TrimSpace(savedUser.ChannelName) == "" {
+		return SelectModelChannel(modelName)
+	}
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	for _, channel := range normalizePrivateSetting(settings.Private).Channels {
+		if channel.Enabled && channel.Name == savedUser.ChannelName {
+			if !channelSupportsModel(channel, modelName) {
+				return model.ModelChannel{}, settingsSafeMessageError{message: "专属渠道不支持当前模型"}
+			}
+			return channel, nil
+		}
+	}
+	return model.ModelChannel{}, settingsSafeMessageError{message: "专属渠道不可用"}
+}
+
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	baseURL := strings.TrimRight(channel.BaseURL, "/")
 	if !strings.HasSuffix(baseURL, "/v1") {
@@ -157,6 +336,9 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	}
 	if channel.Models == nil {
 		channel.Models = []string{}
+	}
+	if channel.Mode == "" {
+		channel.Mode = "openai"
 	}
 	if channel.Weight <= 0 {
 		channel.Weight = 1
@@ -190,10 +372,10 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 		}
 	}
 	if strings.TrimSpace(resolved.BaseURL) == "" {
-		return model.ModelChannel{}, safeMessageError{message: "缺少接口地址"}
+		return model.ModelChannel{}, settingsSafeMessageError{message: "缺少接口地址"}
 	}
 	if strings.TrimSpace(resolved.APIKey) == "" {
-		return model.ModelChannel{}, safeMessageError{message: "缺少 API Key"}
+		return model.ModelChannel{}, settingsSafeMessageError{message: "缺少 API Key"}
 	}
 	return resolved, nil
 }
@@ -278,30 +460,30 @@ func readAdminChannelError(body []byte, statusCode int, fallback string) error {
 	}
 	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
 		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-			return safeMessageError{message: payload.Error.Message}
+			return settingsSafeMessageError{message: payload.Error.Message}
 		}
 		if strings.TrimSpace(payload.Msg) != "" {
-			return safeMessageError{message: payload.Msg}
+			return settingsSafeMessageError{message: payload.Msg}
 		}
 	}
 	if statusCode == http.StatusUnauthorized {
-		return safeMessageError{message: "上游接口认证失败（401），请检查 API Key"}
+		return settingsSafeMessageError{message: "上游接口认证失败（401），请检查 API Key"}
 	}
 	if statusCode > 0 {
-		return safeMessageError{message: fmt.Sprintf("%s：%d", fallback, statusCode)}
+		return settingsSafeMessageError{message: fmt.Sprintf("%s：%d", fallback, statusCode)}
 	}
-	return safeMessageError{message: fallback}
+	return settingsSafeMessageError{message: fallback}
 }
 
-type safeMessageError struct {
+type settingsSafeMessageError struct {
 	message string
 }
 
-func (err safeMessageError) Error() string {
+func (err settingsSafeMessageError) Error() string {
 	return err.message
 }
 
-func (err safeMessageError) SafeMessage() string {
+func (err settingsSafeMessageError) SafeMessage() string {
 	return err.message
 }
 
@@ -311,12 +493,18 @@ func modelChannelsForModel(channels []model.ModelChannel, modelName string) []mo
 		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" {
 			continue
 		}
-		for _, item := range channel.Models {
-			if strings.TrimSpace(item) == modelName {
-				result = append(result, channel)
-				break
-			}
+		if channelSupportsModel(channel, modelName) {
+			result = append(result, channel)
 		}
 	}
 	return result
+}
+
+func channelSupportsModel(channel model.ModelChannel, modelName string) bool {
+	for _, item := range channel.Models {
+		if strings.TrimSpace(item) == modelName {
+			return true
+		}
+	}
+	return false
 }

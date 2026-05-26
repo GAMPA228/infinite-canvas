@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/basketikun/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -15,6 +16,12 @@ func ListUsers(q model.Query) ([]model.User, int64, error) {
 	}
 	q.Normalize()
 	tx := db.Model(&model.User{})
+	if keyword := strings.TrimSpace(q.Keyword); keyword != "" {
+		tx = tx.Where("username LIKE ? OR invite_code LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
+	}
+	if q.Type != "" {
+		tx = tx.Where("role = ?", q.Type)
+	}
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -65,6 +72,25 @@ func GetUserByUsername(username string) (model.User, bool, error) {
 	return findUser(db, "username = ?", username)
 }
 
+// CountAdminsExcept 返回排除指定用户后的管理员数量。
+func CountAdminsExcept(id string) (int64, error) {
+	db, err := DB()
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	return total, db.Model(&model.User{}).Where("role = ? AND id <> ?", model.UserRoleAdmin, id).Count(&total).Error
+}
+
+// GetUserByInviteCode 根据邀请码查询用户。
+func GetUserByInviteCode(code string) (model.User, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.User{}, false, err
+	}
+	return findUser(db, "invite_code = ?", code)
+}
+
 // SaveUser 保存用户信息。
 func SaveUser(user model.User) (model.User, error) {
 	db, err := DB()
@@ -72,6 +98,89 @@ func SaveUser(user model.User) (model.User, error) {
 		return user, err
 	}
 	return user, db.Save(&user).Error
+}
+
+// ConsumeUserCredits 扣除用户算力点，余额不足时返回 ok=false。
+func ConsumeUserCredits(id string, credits int, now string) (model.User, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.User{}, false, err
+	}
+	if credits <= 0 {
+		user, ok, err := GetUserByID(id)
+		return user, ok, err
+	}
+	tx := db.Model(&model.User{}).Where("id = ? AND credits >= ?", id, credits).Updates(map[string]any{
+		"credits":    gorm.Expr("credits - ?", credits),
+		"updated_at": now,
+	})
+	if tx.Error != nil {
+		return model.User{}, false, tx.Error
+	}
+	user, ok, err := GetUserByID(id)
+	return user, ok && tx.RowsAffected > 0, err
+}
+
+// RefundUserCredits 返还用户算力点。
+func RefundUserCredits(id string, credits int, now string) (model.User, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.User{}, false, err
+	}
+	if credits <= 0 {
+		user, ok, err := GetUserByID(id)
+		return user, ok, err
+	}
+	tx := db.Model(&model.User{}).Where("id = ?", id).Updates(map[string]any{
+		"credits":    gorm.Expr("credits + ?", credits),
+		"updated_at": now,
+	})
+	if tx.Error != nil {
+		return model.User{}, false, tx.Error
+	}
+	user, ok, err := GetUserByID(id)
+	return user, ok && tx.RowsAffected > 0, err
+}
+
+// SaveCreditLog 保存算力点变更流水。
+func SaveCreditLog(log model.CreditLog) (model.CreditLog, error) {
+	db, err := DB()
+	if err != nil {
+		return log, err
+	}
+	return log, db.Save(&log).Error
+}
+
+// ListCreditLogs 分页查询算力点日志。
+func ListCreditLogs(q model.Query) ([]model.CreditLog, int64, error) {
+	db, err := DB()
+	if err != nil {
+		return nil, 0, err
+	}
+	q.Normalize()
+	tx := db.Model(&model.CreditLog{})
+	if keyword := strings.TrimSpace(q.Keyword); keyword != "" {
+		like := "%" + keyword + "%"
+		tx = tx.Where("user_id LIKE ? OR type LIKE ? OR remark LIKE ? OR related_id LIKE ?", like, like, like, like)
+	}
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var logs []model.CreditLog
+	err = tx.Order("created_at desc").Offset(q.Offset()).Limit(q.PageSize).Find(&logs).Error
+	return logs, total, err
+}
+
+// DeleteCreditLog 删除算力点日志。
+func DeleteCreditLog(id string) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Delete(&model.CreditLog{}, "id = ?", id).Error
 }
 
 // DeleteUser 删除指定用户。

@@ -14,21 +14,30 @@ type loginRequest struct {
 }
 
 type registerRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	InviteCode string `json:"inviteCode"`
 }
 
 type saveUserRequest struct {
-	ID       string         `json:"id"`
-	Username string         `json:"username"`
-	Password string         `json:"password"`
-	Role     model.UserRole `json:"role"`
+	ID           string         `json:"id"`
+	Username     string         `json:"username"`
+	Password     string         `json:"password"`
+	Role         model.UserRole `json:"role"`
+	ChannelName  string         `json:"channelName"`
+	InviteCode   string         `json:"inviteCode"`
+	InviteUsedAt string         `json:"inviteUsedAt"`
+	InviterID    string         `json:"inviterId"`
+}
+
+type adjustUserCreditsRequest struct {
+	Credits int `json:"credits"`
 }
 
 func Register(w http.ResponseWriter, r *http.Request) {
 	var request registerRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
-	session, err := service.Register(request.Username, request.Password)
+	session, err := service.Register(request.Username, request.Password, request.InviteCode)
 	if err != nil {
 		FailError(w, err)
 		return
@@ -42,10 +51,6 @@ func Login(w http.ResponseWriter, r *http.Request) {
 	session, err := service.Login(request.Username, request.Password)
 	if err != nil {
 		FailError(w, err)
-		return
-	}
-	if session.User.Role != model.UserRoleAdmin {
-		Fail(w, "需要管理员权限")
 		return
 	}
 	OK(w, session)
@@ -87,9 +92,13 @@ func AdminSaveUser(w http.ResponseWriter, r *http.Request) {
 	var request saveUserRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
 	user, err := service.SaveUser(model.User{
-		ID:       request.ID,
-		Username: request.Username,
-		Role:     request.Role,
+		ID:           request.ID,
+		Username:     request.Username,
+		Role:         request.Role,
+		ChannelName:  request.ChannelName,
+		InviteCode:   request.InviteCode,
+		InviteUsedAt: request.InviteUsedAt,
+		InviterID:    request.InviterID,
 	}, request.Password)
 	if err != nil {
 		FailError(w, err)
@@ -99,7 +108,50 @@ func AdminSaveUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminDeleteUser(w http.ResponseWriter, r *http.Request, id string) {
+	if user, ok := service.UserFromContext(r.Context()); ok && user.ID == id {
+		Fail(w, "不能删除当前登录账号")
+		return
+	}
 	if err := service.DeleteUser(id); err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, true)
+}
+
+func AdminAdjustUserCredits(w http.ResponseWriter, r *http.Request, id string) {
+	var request adjustUserCreditsRequest
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	user, err := service.AdjustUserCredits(id, request.Credits)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, user)
+}
+
+func AdminCreditLogs(w http.ResponseWriter, r *http.Request) {
+	logs, err := service.ListCreditLogs(parseQuery(r))
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, logs)
+}
+
+func AdminSaveCreditLog(w http.ResponseWriter, r *http.Request) {
+	var log model.CreditLog
+	_ = json.NewDecoder(r.Body).Decode(&log)
+	result, err := service.SaveCreditLog(log)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func AdminDeleteCreditLog(w http.ResponseWriter, r *http.Request, id string) {
+	if err := service.DeleteCreditLog(id); err != nil {
 		FailError(w, err)
 		return
 	}

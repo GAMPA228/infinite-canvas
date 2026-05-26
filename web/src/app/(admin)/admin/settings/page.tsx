@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
-import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminSettings } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -28,6 +28,7 @@ const emptySettings: AdminSettings = {
     public: {
         modelChannel: {
             availableModels: [],
+            modelCosts: [],
             defaultModel: "",
             defaultImageModel: "",
             defaultVideoModel: "",
@@ -38,7 +39,7 @@ const emptySettings: AdminSettings = {
     },
     private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" } },
 };
-const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, enabled: true, remark: "" };
+const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], mode: "openai", weight: 1, enabled: true, remark: "" };
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
@@ -61,10 +62,11 @@ export default function AdminSettingsPage() {
     const [testResults, setTestResults] = useState<Record<string, { status: "success" | "error"; duration?: string; message: string }>>({});
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
-    const modelOptions = useMemo(() => uniqueModels([...publicModels, ...channelModels]), [publicModels, channelModels]);
+    const modelOptions = useMemo(() => uniqueModels([...publicModels, ...channelModels, ...modelCosts.map((item) => item.model)]), [publicModels, channelModels, modelCosts]);
     const activeMode = editorMode[activeTab];
     const activeJsonText = jsonText[activeTab];
     const jsonError = activeMode === "json" ? getJsonError(activeJsonText) : "";
@@ -76,6 +78,7 @@ export default function AdminSettingsPage() {
             const data = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(data);
             setChannels(data.private.channels);
+            setModelCosts(data.public.modelChannel.modelCosts);
             setJsonText({
                 public: JSON.stringify(data.public, null, 2),
                 private: JSON.stringify(data.private, null, 2),
@@ -107,6 +110,7 @@ export default function AdminSettingsPage() {
             const merged = mergeChannelApiKeys(values.private.channels, saved);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
+            setModelCosts(merged.public.modelChannel.modelCosts);
             setJsonText({
                 public: JSON.stringify(merged.public, null, 2),
                 private: JSON.stringify(merged.private, null, 2),
@@ -135,6 +139,7 @@ export default function AdminSettingsPage() {
         }
         form.setFieldsValue({ [tab]: parsed } as Partial<AdminSettings>);
         if (tab === "private") setChannels((parsed as AdminSettings["private"]).channels);
+        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         setEditorMode((current) => ({ ...current, [tab]: nextMode }));
     };
 
@@ -144,6 +149,7 @@ export default function AdminSettingsPage() {
             message.error("JSON 格式不正确");
             return;
         }
+        if (tab === "public") setModelCosts((parsed as AdminSettings["public"]).modelChannel.modelCosts);
         setJsonText((current) => ({
             ...current,
             [tab]: JSON.stringify(parsed, null, 2),
@@ -247,6 +253,7 @@ export default function AdminSettingsPage() {
         const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
         const merged = mergeChannelApiKeys(nextChannels, saved);
         setChannels(merged.private.channels);
+        setModelCosts(merged.public.modelChannel.modelCosts);
         form.setFieldsValue(merged);
         setJsonText({
             public: JSON.stringify(merged.public, null, 2),
@@ -342,9 +349,69 @@ export default function AdminSettingsPage() {
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
-                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许用户自定义渠道" extra="开启后，前端可提供走后端渠道和用户自定义 baseUrl 直连两种模式" valuePropName="checked">
+                                        <Form.Item name={["public", "modelChannel", "allowCustomChannel"]} label="是否允许管理员本地直连" extra="开启后，仅管理员的配置弹窗可切换本地直连；普通用户和 VIP 用户始终走后端渠道。" valuePropName="checked">
                                             <Switch />
                                         </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                        <Typography.Title level={5}>模型算力点</Typography.Title>
+                                        <Table
+                                            rowKey="model"
+                                            pagination={false}
+                                            size="small"
+                                            dataSource={publicModels.map((model) => ({ model, ...modelCostCredits(modelCosts, model) }))}
+                                            columns={[
+                                                { title: "模型", dataIndex: "model" },
+                                                {
+                                                    title: "1K 图片",
+                                                    dataIndex: "imageCredits1k",
+                                                    width: 180,
+                                                    render: (_, item) => (
+                                                        <InputNumber
+                                                            min={0}
+                                                            step={1}
+                                                            precision={0}
+                                                            className="!w-full"
+                                                            value={item.imageCredits1k}
+                                                            addonAfter="点"
+                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits1k", Number(value) || 0)}
+                                                        />
+                                                    ),
+                                                },
+                                                {
+                                                    title: "2K 图片",
+                                                    dataIndex: "imageCredits2k",
+                                                    width: 180,
+                                                    render: (_, item) => (
+                                                        <InputNumber
+                                                            min={0}
+                                                            step={1}
+                                                            precision={0}
+                                                            className="!w-full"
+                                                            value={item.imageCredits2k}
+                                                            addonAfter="点"
+                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits2k", Number(value) || 0)}
+                                                        />
+                                                    ),
+                                                },
+                                                {
+                                                    title: "4K 图片",
+                                                    dataIndex: "imageCredits4k",
+                                                    width: 180,
+                                                    render: (_, item) => (
+                                                        <InputNumber
+                                                            min={0}
+                                                            step={1}
+                                                            precision={0}
+                                                            className="!w-full"
+                                                            value={item.imageCredits4k}
+                                                            addonAfter="点"
+                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits4k", Number(value) || 0)}
+                                                        />
+                                                    ),
+                                                },
+                                            ]}
+                                        />
                                     </Col>
                                 </Row>
                             </Form>
@@ -364,7 +431,7 @@ export default function AdminSettingsPage() {
                     ) : activeMode === "visual" ? (
                         <Form form={form} layout="vertical" initialValues={emptySettings} requiredMark={false}>
                             <Flex vertical gap={12}>
-                                <Alert showIcon type="warning" title="当前还没有完整用户体系，所有访问到站点的用户都可以无条件使用后端渠道 API。请不要公网部署，避免私有渠道额度被他人消耗。" />
+                                <Alert showIcon type="warning" title="后端渠道会承载普通用户和 VIP 用户请求，请在用户管理中按需分配角色和 VIP 专属渠道，避免私有渠道额度被异常消耗。" />
                                 <Card size="small" title="提示词定时同步">
                                     <Row gutter={16} align="middle">
                                         <Col xs={24} md={8}>
@@ -389,6 +456,7 @@ export default function AdminSettingsPage() {
                                     columns={[
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
                                         { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value || "openai"}</Tag> },
+                                        { title: "模式", dataIndex: "mode", width: 130, render: (value) => <Tag color={value === "codex" ? "purple" : "default"}>{value === "codex" ? "Codex兼容" : "标准"}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
@@ -469,6 +537,16 @@ export default function AdminSettingsPage() {
                             <Col span={12}>
                                 <Form.Item name="protocol" label="协议">
                                     <Select options={[{ label: "OpenAI", value: "openai" }]} />
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
+                                <Form.Item name="mode" label="请求模式" extra="Codex/中转兼容会在生图接口中移除 quality、response_format；图片质量档位会统一换算成 1K/2K/4K 像素尺寸。">
+                                    <Select
+                                        options={[
+                                            { label: "标准 OpenAI", value: "openai" },
+                                            { label: "Codex / 中转兼容", value: "codex" },
+                                        ]}
+                                    />
                                 </Form.Item>
                             </Col>
                             <Col span={12}>
@@ -593,14 +671,28 @@ function normalizeSettings(settings: Partial<AdminSettings> = {}): AdminSettings
 }
 
 function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}): AdminSettings["public"] {
+    const availableModels = setting.modelChannel?.availableModels || [];
     return {
         ...emptySettings.public,
         modelChannel: {
             ...emptySettings.public.modelChannel,
             ...(setting.modelChannel || {}),
-            availableModels: setting.modelChannel?.availableModels || [],
+            availableModels,
+            modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || [], availableModels),
         },
     };
+}
+
+function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChannel"]["modelCosts"][number]>[], models: string[] = []) {
+    const map = new Map<string, AdminModelCost>();
+    for (const item of items) {
+        if (!item.model) continue;
+        map.set(item.model, normalizeModelCostItem(item));
+    }
+    for (const model of models) {
+        if (model && !map.has(model)) map.set(model, defaultModelCost(model));
+    }
+    return Array.from(map.values());
 }
 
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
@@ -620,10 +712,40 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
         models: item.models || [],
+        mode: item.mode === "codex" ? "codex" : "openai",
         weight: Math.max(1, Number(item.weight) || 1),
         enabled: item.enabled !== false,
         remark: item.remark || "",
     };
+}
+
+function normalizeModelCostItem(item: Partial<AdminModelCost>): AdminModelCost {
+    const base = Math.max(0, Number(item.credits) || 0);
+    return {
+        model: item.model || "",
+        credits: base,
+        imageCredits1k: Math.max(0, Number(item.imageCredits1k) || base || 1),
+        imageCredits2k: Math.max(0, Number(item.imageCredits2k) || base || 2),
+        imageCredits4k: Math.max(0, Number(item.imageCredits4k) || base || 3),
+    };
+}
+
+function defaultModelCost(model: string): AdminModelCost {
+    return { model, credits: 0, imageCredits1k: 1, imageCredits2k: 2, imageCredits4k: 3 };
+}
+
+function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], model: string) {
+    return items.find((item) => item.model === model) || defaultModelCost(model);
+}
+
+function setModelCost(form: any, setModelCosts: (items: AdminModelCost[]) => void, model: string, key: "imageCredits1k" | "imageCredits2k" | "imageCredits4k", credits: number) {
+    const current = (form.getFieldValue(["public", "modelChannel", "modelCosts"]) || []) as AdminSettings["public"]["modelChannel"]["modelCosts"];
+    const next = current.filter((item) => item.model !== model);
+    const item = normalizeModelCostItem(current.find((value) => value.model === model) || defaultModelCost(model));
+    item[key] = Math.max(0, credits);
+    next.push(item);
+    form.setFieldValue(["public", "modelChannel", "modelCosts"], next);
+    setModelCosts(next);
 }
 
 function mergeChannelApiKeys(currentChannels: AdminModelChannel[], saved: AdminSettings): AdminSettings {

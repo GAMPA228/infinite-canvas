@@ -2,12 +2,13 @@ import { apiGet, apiPost } from "@/services/api/request";
 
 export const AUTH_TOKEN_KEY = "infinite-canvas-auth-token-v1";
 
-export type UserRole = "guest" | "user" | "admin";
+export type UserRole = "guest" | "user" | "vip" | "admin";
 
 export type AuthUser = {
     id: string;
     username: string;
     role: UserRole;
+    credits: number;
     createdAt: string;
     updatedAt: string;
 };
@@ -20,10 +21,11 @@ export type AuthSession = {
 export type AuthPayload = {
     username: string;
     password: string;
+    inviteCode?: string;
 };
 
 export async function login(payload: AuthPayload) {
-    return apiPost<AuthSession>("/api/admin/login", payload);
+    return apiPost<AuthSession>("/api/auth/login", payload);
 }
 
 export async function register(payload: AuthPayload) {

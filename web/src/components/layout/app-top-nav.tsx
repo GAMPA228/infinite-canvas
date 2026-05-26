@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { navigationTools, type NavigationToolSlug } from "@/constant/navigation-tools";
 import { AppConfigModal } from "@/components/layout/app-config-modal";
+import { loginRequiredHref } from "@/components/layout/auth-route-guard";
 import { MobileNavDrawer } from "@/components/layout/mobile-nav-drawer";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useConfigStore } from "@/stores/use-config-store";
@@ -41,7 +42,7 @@ export function AppTopNav() {
                                         WebkitMask: "url(/logo.svg) center / contain no-repeat",
                                     }}
                                 />
-                                <span className="text-base font-medium">无限画布</span>
+                                <span className="text-base font-medium">AMZ</span>
                             </Link>
 
                             <button
@@ -61,7 +62,7 @@ export function AppTopNav() {
                                     return (
                                         <Link
                                             key={tool.slug}
-                                            href={`/${tool.slug}`}
+                                            href={!user && (tool.slug === "canvas" || tool.slug === "image") ? loginRequiredHref(`/${tool.slug}`) : `/${tool.slug}`}
                                             className={cn(
                                                 "relative flex h-16 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
                                                 active

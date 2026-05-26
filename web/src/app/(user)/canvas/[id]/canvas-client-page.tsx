@@ -15,7 +15,9 @@ import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { canUsePremiumImageQuality, isPremiumImageQuality, upgradePlanMessage } from "@/lib/user-plan";
 import { cropDataUrl } from "../utils/canvas-image-data";
 import { fitNodeSize, nodeSizeFromRatio } from "../utils/canvas-node-size";
 import { App, Button, Dropdown, Modal } from "antd";
@@ -218,6 +220,8 @@ function InfiniteCanvasPage() {
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const userRole = useUserStore((state) => state.user?.role);
+    const canUsePremiumQuality = canUsePremiumImageQuality(userRole);
     const addAsset = useAssetStore((state) => state.addAsset);
     const cleanupAssetImages = useAssetStore((state) => state.cleanupImages);
     const hydrated = useCanvasStore((state) => state.hydrated);
@@ -822,7 +826,7 @@ function InfiniteCanvasPage() {
     }, [applyHistory]);
 
     const createAndOpenProject = useCallback(() => {
-        const id = createProject(`无限画布 ${useCanvasStore.getState().projects.length + 1}`);
+        const id = createProject(`画布 ${useCanvasStore.getState().projects.length + 1}`);
         router.push(`/canvas/${id}`);
     }, [createProject, router]);
 
@@ -1388,6 +1392,10 @@ function InfiniteCanvasPage() {
                 openConfigDialog(true);
                 return;
             }
+            if (!canUsePremiumQuality && isPremiumImageQuality(generationConfig.quality)) {
+                message.warning(upgradePlanMessage);
+                return;
+            }
             const childId = nanoid();
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
@@ -1426,7 +1434,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, openConfigDialog],
+        [canUsePremiumQuality, effectiveConfig, message, openConfigDialog],
     );
 
     const handleFontSizeChange = useCallback((nodeId: string, fontSize: number) => {
@@ -1552,6 +1560,10 @@ function InfiniteCanvasPage() {
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
+                return;
+            }
+            if (mode === "image" && !canUsePremiumQuality && isPremiumImageQuality(generationConfig.quality)) {
+                message.warning(upgradePlanMessage);
                 return;
             }
 
@@ -1807,7 +1819,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, openConfigDialog],
+        [canUsePremiumQuality, effectiveConfig, message, openConfigDialog],
     );
 
     const handleRetryNode = useCallback(
@@ -1828,6 +1840,10 @@ function InfiniteCanvasPage() {
                     : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : "image"), count: "1" };
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
                 openConfigDialog(true);
+                return;
+            }
+            if (node.type === CanvasNodeType.Image && !canUsePremiumQuality && isPremiumImageQuality(generationConfig.quality)) {
+                message.warning(upgradePlanMessage);
                 return;
             }
 
@@ -1896,7 +1912,7 @@ function InfiniteCanvasPage() {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog],
+        [canUsePremiumQuality, effectiveConfig, message, openConfigDialog],
     );
 
     const generateImageFromTextNode = useCallback(

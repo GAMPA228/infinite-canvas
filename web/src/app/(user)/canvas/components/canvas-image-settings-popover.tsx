@@ -5,28 +5,26 @@ import { Settings2 } from "lucide-react";
 import { Button, ConfigProvider, Popover } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
+import { canUsePremiumImageQuality, isPremiumImageQuality } from "@/lib/user-plan";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 import type { AiConfig } from "@/stores/use-config-store";
 
 const qualityOptions = [
-    { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
-    { value: "low", label: "低" },
+    { value: "auto", label: "自动(1K)" },
+    { value: "low", label: "1K" },
+    { value: "medium", label: "2K" },
+    { value: "high", label: "4K" },
 ];
 const aspectOptions = [
+    { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
     { value: "1:1", label: "1:1", width: 1024, height: 1024, icon: "square" },
     { value: "3:2", label: "3:2", width: 1536, height: 1024, icon: "landscape" },
     { value: "2:3", label: "2:3", width: 1024, height: 1536, icon: "portrait" },
     { value: "4:3", label: "4:3", width: 1344, height: 1024, icon: "landscape" },
     { value: "3:4", label: "3:4", width: 1024, height: 1344, icon: "portrait" },
-    { value: "9:16", label: "9:16", width: 1024, height: 1792, icon: "portrait" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
-    { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
+    { value: "16:9", label: "16:9", width: 1536, height: 864, icon: "landscape" },
+    { value: "9:16", label: "9:16", width: 864, height: 1536, icon: "portrait" },
 ];
 
 type CanvasImageSettingsPopoverProps = {
@@ -37,22 +35,32 @@ type CanvasImageSettingsPopoverProps = {
     buttonClassName?: string;
     getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
     placement?: "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
+    onRequireUpgrade?: () => void;
 };
 
-export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, getPopupContainer, placement = "topLeft" }: CanvasImageSettingsPopoverProps) {
+export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, getPopupContainer, placement = "topLeft", onRequireUpgrade }: CanvasImageSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const userRole = useUserStore((state) => state.user?.role);
+    const canUsePremiumQuality = canUsePremiumImageQuality(userRole);
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
-    const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const selectedAspect = aspectOptions.find((item) => item.value === activeSize);
+    const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0], quality);
     const selectAspect = (value: string) => {
         const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        onConfigChange("size", option?.value || "auto");
     };
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);
+    };
+    const changeQuality = (value: string) => {
+        if (!canUsePremiumQuality && isPremiumImageQuality(value)) {
+            onRequireUpgrade?.();
+            return;
+        }
+        onConfigChange("quality", value);
     };
 
     return (
@@ -72,7 +80,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
                             <SettingTitle color={theme.node.muted}>质量</SettingTitle>
                             <div className="grid grid-cols-4 gap-3">
                                 {qualityOptions.map((item) => (
-                                    <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
+                                    <OptionPill key={item.value} selected={quality === item.value} locked={!canUsePremiumQuality && isPremiumImageQuality(item.value)} theme={theme} onClick={() => changeQuality(item.value)}>
                                         {item.label}
                                     </OptionPill>
                                 ))}
@@ -141,12 +149,12 @@ export function CanvasImageSettingsTheme({ theme, children }: { theme: (typeof c
     );
 }
 
-function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onClick: () => void; children: ReactNode }) {
+function OptionPill({ selected, locked, theme, onClick, children }: { selected: boolean; locked?: boolean; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; onClick: () => void; children: ReactNode }) {
     return (
         <button
             type="button"
             className="h-10 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80"
-            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
+            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text, opacity: locked ? 0.45 : 1 }}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={onClick}
         >
@@ -212,13 +220,22 @@ function SettingTitle({ children, color }: { children: string; color: string }) 
 }
 
 function qualityLabel(value: string) {
-    return ({ auto: "自动", high: "高", medium: "中", low: "低" } as Record<string, string>)[value] || value;
+    return qualityOptions.find((item) => item.value === value)?.label || value;
 }
 
-function readSizeDimensions(size: string, fallback: { width: number; height: number }) {
+function readSizeDimensions(size: string, fallback: { value?: string; width: number; height: number }, quality: string) {
     const match = size?.match(/^(\d+)x(\d+)$/);
-    return {
-        width: match ? Number(match[1]) : fallback.width,
-        height: match ? Number(match[2]) : fallback.height,
+    if (match) return { width: Number(match[1]), height: Number(match[2]) };
+    return imageSizeDimensionsByQuality(fallback.value || "1:1", quality) || { width: fallback.width, height: fallback.height };
+}
+
+function imageSizeDimensionsByQuality(size: string, quality: string) {
+    const aspect = size === "auto" || !size ? "1:1" : size.split("-")[0];
+    const tier = quality === "high" ? "4k" : quality === "medium" ? "2k" : "1k";
+    const sizes: Record<string, Record<string, { width: number; height: number }>> = {
+        "1k": { "1:1": { width: 1024, height: 1024 }, "3:2": { width: 1536, height: 1024 }, "2:3": { width: 1024, height: 1536 }, "4:3": { width: 1344, height: 1024 }, "3:4": { width: 1024, height: 1344 }, "16:9": { width: 1536, height: 864 }, "9:16": { width: 864, height: 1536 } },
+        "2k": { "1:1": { width: 2048, height: 2048 }, "3:2": { width: 2048, height: 1365 }, "2:3": { width: 1365, height: 2048 }, "4:3": { width: 2048, height: 1536 }, "3:4": { width: 1536, height: 2048 }, "16:9": { width: 2048, height: 1152 }, "9:16": { width: 1152, height: 2048 } },
+        "4k": { "1:1": { width: 4096, height: 4096 }, "3:2": { width: 3840, height: 2560 }, "2:3": { width: 2560, height: 3840 }, "4:3": { width: 3840, height: 2880 }, "3:4": { width: 2880, height: 3840 }, "16:9": { width: 3840, height: 2160 }, "9:16": { width: 2160, height: 3840 } },
     };
+    return sizes[tier]?.[aspect];
 }

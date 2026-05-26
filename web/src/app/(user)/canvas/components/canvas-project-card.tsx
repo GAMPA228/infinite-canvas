@@ -81,7 +81,7 @@ function exportProject(project: CanvasProject) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${(project.title || "无限画布").replace(/[\\/:*?"<>|]/g, "_")}.json`;
+    link.download = `${(project.title || "画布").replace(/[\\/:*?"<>|]/g, "_")}.json`;
     link.click();
     URL.revokeObjectURL(url);
 }

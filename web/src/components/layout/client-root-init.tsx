@@ -21,5 +21,12 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         if (!isLoginPage) void hydrateUser();
     }, [hydrateUser, isLoginPage]);
 
+    useEffect(() => {
+        const unsubscribe = useUserStore.subscribe((state, prevState) => {
+            if (state.token !== prevState.token || state.user?.role !== prevState.user?.role) void loadPublicSettings();
+        });
+        return unsubscribe;
+    }, [loadPublicSettings]);
+
     return <>{children}</>;
 }

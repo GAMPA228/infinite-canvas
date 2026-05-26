@@ -35,14 +35,14 @@
 | `defaultImageModel` | string | 默认图片模型，从 `availableModels` 中选择 |
 | `defaultTextModel` | string | 默认文本模型，从 `availableModels` 中选择 |
 | `systemPrompt` | string | 系统提示词 |
-| `allowCustomChannel` | boolean | 是否允许用户在配置弹窗中切换为本地直连渠道，默认允许 |
+| `allowCustomChannel` | boolean | 是否允许管理员在配置弹窗中切换为本地直连渠道，默认允许；普通用户和 VIP 用户始终走后端渠道 |
 
 用户侧请求模式：
 
 | 模式 | 说明 |
 | --- | --- |
-| 云端渠道 | 使用后端 `/api/v1/*` 代理接口，请求会按模型名匹配 `private.value.channels` 中的可用渠道 |
-| 本地直连 | 默认可选；`allowCustomChannel` 关闭后不可选，用户在浏览器本地配置 `baseUrl`、`apiKey` 和模型列表后直接请求模型接口 |
+| 云端渠道 | 普通用户和 VIP 用户固定使用后端 `/api/v1/*` 代理接口；VIP 用户配置了专属渠道时，公开配置会回显该渠道的模型列表，请求优先按专属渠道调用，否则按模型名匹配 `private.value.channels` 中的可用渠道 |
+| 本地直连 | 仅管理员在 `allowCustomChannel` 开启时可选；管理员在浏览器本地配置 `baseUrl`、`apiKey` 和模型列表后直接请求模型接口 |
 
 ## private.value
 
@@ -81,6 +81,7 @@
 | `baseUrl` | string | OpenAI 兼容接口地址 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
+| `mode` | string | 请求模式：`openai` 标准模式、`codex` Codex/中转兼容模式 |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |
 | `enabled` | boolean | 是否启用 |
 | `remark` | string | 备注 |

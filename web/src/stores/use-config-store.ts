@@ -6,6 +6,7 @@ import { persist } from "zustand/middleware";
 
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type AiConfig = {
     channelMode: "remote" | "local";
@@ -57,18 +58,23 @@ type ConfigStore = {
     clearPromptContinue: () => void;
 };
 
-function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null) {
-    const channelMode = modelChannel?.allowCustomChannel ? config.channelMode : "remote";
+function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSettings["modelChannel"] | null, isAdmin: boolean) {
+    const channelMode = isAdmin && modelChannel?.allowCustomChannel ? config.channelMode : "remote";
     if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
-    const models = modelChannel.availableModels;
+    const models = modelChannel.availableModels || [];
+    const model = models.includes(config.model) ? config.model : modelChannel.defaultModel;
+    const imageModel = models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || modelChannel.defaultModel;
+    const videoModel = models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || modelChannel.defaultModel || "sora-2";
+    const textModel = models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || modelChannel.defaultModel;
+    const fallbackModel = models[0] || config.model;
     return {
         ...config,
         channelMode,
         models,
-        model: models.includes(config.model) ? config.model : modelChannel.defaultModel,
-        imageModel: models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || modelChannel.defaultModel,
-        videoModel: models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || modelChannel.defaultModel || "sora-2",
-        textModel: models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || modelChannel.defaultModel,
+        model: models.includes(model) ? model : fallbackModel,
+        imageModel: models.includes(imageModel) ? imageModel : fallbackModel,
+        videoModel: models.includes(videoModel) ? videoModel : fallbackModel,
+        textModel: models.includes(textModel) ? textModel : fallbackModel,
         systemPrompt: modelChannel.systemPrompt,
     };
 }
@@ -120,7 +126,8 @@ export const useConfigStore = create<ConfigStore>()(
 export function useEffectiveConfig() {
     const config = useConfigStore((state) => state.config);
     const modelChannel = useConfigStore((state) => state.publicSettings?.modelChannel || null);
-    return useMemo(() => resolveEffectiveConfig(config, modelChannel), [config, modelChannel]);
+    const isAdmin = useUserStore((state) => state.user?.role === "admin");
+    return useMemo(() => resolveEffectiveConfig(config, modelChannel, isAdmin), [config, modelChannel, isAdmin]);
 }
 
 export function buildApiUrl(baseUrl: string, path: string) {

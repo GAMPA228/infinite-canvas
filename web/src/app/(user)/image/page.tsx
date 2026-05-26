@@ -14,6 +14,8 @@ import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
+import { useUserStore } from "@/stores/use-user-store";
+import { canUsePremiumImageQuality, isPremiumImageQuality, upgradePlanMessage } from "@/lib/user-plan";
 import type { ReferenceImage } from "@/types/image";
 
 type GeneratedImage = {
@@ -51,7 +53,12 @@ type GenerationLog = {
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
 const sizeOptions = ["auto", "1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"].map((value) => ({ label: value, value }));
-const qualityOptions = ["auto", "low", "medium", "high"].map((value) => ({ label: value, value }));
+const qualityOptions = [
+    { label: "自动（1K）", value: "auto" },
+    { label: "1K", value: "low" },
+    { label: "2K", value: "medium" },
+    { label: "4K", value: "high" },
+];
 const LOG_STORE_KEY = "infinite-canvas:image_generation_logs";
 const LOG_STORE_PREFIX = `${LOG_STORE_KEY}:`;
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
@@ -65,6 +72,10 @@ export default function ImagePage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const user = useUserStore((state) => state.user);
+    const userRole = useUserStore((state) => state.user?.role);
+    const refreshUser = useUserStore((state) => state.refreshUser);
+    const logOwnerKey = user?.id || "guest";
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -83,6 +94,7 @@ export default function ImagePage() {
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
+    const canUsePremiumQuality = canUsePremiumImageQuality(userRole);
 
     useEffect(() => {
         if (!running || !startedAt) return;
@@ -92,7 +104,7 @@ export default function ImagePage() {
 
     useEffect(() => {
         void refreshLogs();
-    }, []);
+    }, [logOwnerKey]);
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -137,6 +149,10 @@ export default function ImagePage() {
             openConfigDialog(true);
             return;
         }
+        if (!canUsePremiumQuality && isPremiumImageQuality(effectiveConfig.quality)) {
+            message.warning(upgradePlanMessage);
+            return;
+        }
 
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
@@ -172,6 +188,7 @@ export default function ImagePage() {
             successCount ? message.success("图片已生成") : message.error(failed?.reason instanceof Error ? failed.reason.message : "生成失败");
         } finally {
             setRunning(false);
+            void refreshUser();
         }
     };
 
@@ -223,7 +240,7 @@ export default function ImagePage() {
     };
 
     const deleteSelectedLogs = () => {
-        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(id))).then(refreshLogs);
+        void Promise.all(selectedLogIds.map((id) => logStore.removeItem(buildLogStoreKey(logOwnerKey, id)))).then(refreshLogs);
         if (previewLog && selectedLogIds.includes(previewLog.id)) {
             setPreviewLog(null);
             setResults([]);
@@ -233,10 +250,10 @@ export default function ImagePage() {
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, log).then(refreshLogs);
+        void logStore.setItem(buildLogStoreKey(logOwnerKey, log.id), log).then(refreshLogs);
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const refreshLogs = async () => setLogs(await readStoredLogs(logOwnerKey));
 
     const previewGenerationLog = async (log: GenerationLog) => {
         setPreviewLog(log);
@@ -259,6 +276,10 @@ export default function ImagePage() {
         if (!isAiConfigReady(effectiveConfig, model)) {
             message.warning("请先完成配置");
             openConfigDialog(true);
+            return null;
+        }
+        if (!canUsePremiumQuality && isPremiumImageQuality(effectiveConfig.quality)) {
+            message.warning(upgradePlanMessage);
             return null;
         }
         return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
@@ -335,6 +356,11 @@ export default function ImagePage() {
                                     </div>
                                 </div>
                                 <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
+                                <div className="mt-2 flex justify-end">
+                                    <Button size="small" icon={<Sparkles className="size-3.5" />} onClick={() => message.info("提示词优化功能待接入")}>
+                                        提示词优化
+                                    </Button>
+                                </div>
                             </div>
 
                             <div className="min-w-0">
@@ -376,7 +402,7 @@ export default function ImagePage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {model} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                    {model} · {effectiveConfig.size} · {imageQualityLabel(effectiveConfig.quality)}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     调整
@@ -384,7 +410,7 @@ export default function ImagePage() {
                             </div>
 
                             <div className="hidden gap-4 sm:grid sm:grid-cols-2">
-                                <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                                        <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} canUsePremiumQuality={canUsePremiumQuality} onRequireUpgrade={() => message.warning(upgradePlanMessage)} />
                             </div>
                         </div>
 
@@ -447,7 +473,7 @@ export default function ImagePage() {
             </Drawer>
             <Drawer title="参数" placement="bottom" size="default" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3">
-                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} />
+                    <GenerationSettings config={effectiveConfig} model={model} updateConfig={updateConfig} openConfigDialog={openConfigDialog} canUsePremiumQuality={canUsePremiumQuality} onRequireUpgrade={() => message.warning(upgradePlanMessage)} />
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
@@ -459,7 +485,16 @@ export default function ImagePage() {
     );
 }
 
-function GenerationSettings({ config, model, updateConfig, openConfigDialog }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void }) {
+function GenerationSettings({ config, model, updateConfig, openConfigDialog, canUsePremiumQuality, onRequireUpgrade }: { config: AiConfig; model: string; updateConfig: UpdateAiConfig; openConfigDialog: (shouldPromptContinue?: boolean) => void; canUsePremiumQuality: boolean; onRequireUpgrade: () => void }) {
+    const options = qualityOptions.map((item) => ({ ...item, label: !canUsePremiumQuality && isPremiumImageQuality(item.value) ? `${item.label}（VIP）` : item.label }));
+    const changeQuality = (value: string) => {
+        if (!canUsePremiumQuality && isPremiumImageQuality(value)) {
+            onRequireUpgrade();
+            return;
+        }
+        updateConfig("quality", value);
+    };
+
     return (
         <>
             <label className="col-span-2 block min-w-0 sm:col-span-1">
@@ -476,10 +511,14 @@ function GenerationSettings({ config, model, updateConfig, openConfigDialog }: {
             </label>
             <label className="block">
                 <span className="mb-1.5 block text-sm font-semibold sm:mb-2 sm:text-base">质量</span>
-                <Select className="canvas-control-select w-full" value={config.quality} options={qualityOptions} onChange={(value) => updateConfig("quality", value)} />
+                <Select className="canvas-control-select w-full" value={config.quality} options={options} onChange={changeQuality} />
             </label>
         </>
     );
+}
+
+function imageQualityLabel(value: string) {
+    return qualityOptions.find((item) => item.value === value)?.label || value;
 }
 
 function ResultImageCard({
@@ -665,12 +704,20 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
     );
 }
 
-async function readStoredLogs() {
+function buildLogStoreKey(ownerKey: string, logId: string) {
+    return `${ownerKey}:${logId}`;
+}
+
+function readLogOwnerKey(storeKey: string) {
+    return storeKey.includes(":") ? storeKey.split(":")[0] : "guest";
+}
+
+async function readStoredLogs(ownerKey: string) {
     if (typeof window === "undefined") return [];
     try {
         const legacyValue = window.localStorage.getItem(LOG_STORE_KEY);
         if (legacyValue) {
-            await Promise.all((JSON.parse(legacyValue) as GenerationLog[]).map((log) => logStore.setItem(log.id, normalizeLog(log))));
+            await Promise.all((JSON.parse(legacyValue) as GenerationLog[]).map((log) => logStore.setItem(buildLogStoreKey(ownerKey, log.id), normalizeLog(log))));
             window.localStorage.removeItem(LOG_STORE_KEY);
         }
         const legacyKeys = Array.from({ length: window.localStorage.length }, (_, index) => window.localStorage.key(index)).filter((key): key is string => Boolean(key?.startsWith(LOG_STORE_PREFIX)));
@@ -678,16 +725,26 @@ async function readStoredLogs() {
             legacyKeys.map(async (key) => {
                 try {
                     const log = normalizeLog(JSON.parse(window.localStorage.getItem(key) || ""));
-                    await logStore.setItem(log.id, log);
+                    await logStore.setItem(buildLogStoreKey(ownerKey, log.id), log);
                     window.localStorage.removeItem(key);
                 } catch {}
             }),
         );
 
         const logs: GenerationLog[] = [];
-        await logStore.iterate<GenerationLog, void>((value) => {
-            logs.push(normalizeLog(value));
+        const migrations: Promise<unknown>[] = [];
+        await logStore.iterate<GenerationLog, void>((value, key) => {
+            if (!key.includes(":")) {
+                if (ownerKey !== "guest") {
+                    const log = normalizeLog(value);
+                    migrations.push(logStore.setItem(buildLogStoreKey(ownerKey, log.id), log).then(() => logStore.removeItem(key)));
+                    logs.push(log);
+                }
+                return;
+            }
+            if (readLogOwnerKey(key) === ownerKey) logs.push(normalizeLog(value));
         });
+        await Promise.all(migrations);
         return logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];

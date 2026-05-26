@@ -1,6 +1,7 @@
 import axios from "axios";
 
 import { dataUrlToFile } from "@/lib/image-utils";
+import { AUTH_TOKEN_KEY } from "@/services/api/auth";
 import { imageToDataUrl } from "@/services/image-storage";
 import { buildApiUrl, type AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
@@ -12,7 +13,18 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiHeaders(config: AiConfig) {
-    return config.channelMode === "remote" ? undefined : { Authorization: `Bearer ${config.apiKey}` };
+    return config.channelMode === "remote" ? authHeader() : { Authorization: `Bearer ${config.apiKey}` };
+}
+
+function authHeader() {
+    if (typeof window === "undefined") return {};
+    let token = "";
+    try {
+        token = JSON.parse(window.localStorage.getItem(AUTH_TOKEN_KEY) || "{}")?.state?.token || "";
+    } catch {
+        token = "";
+    }
+    return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export async function requestVideoGeneration(config: AiConfig, prompt: string, references: ReferenceImage[] = []) {

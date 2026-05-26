@@ -15,6 +15,7 @@
 当前启动时执行 `AutoMigrate`，自动维护以下表：
 
 - `users`
+- `credit_logs`
 - `prompts`
 - `assets`
 - `settings`
@@ -33,11 +34,14 @@
 | `email`         | string | 邮箱                       |
 | `display_name`  | string | 昵称                       |
 | `avatar_url`    | string | 头像地址                     |
-| `role`          | string | 角色：`user`、`admin`        |
-| `credits`       | number | 算力点余额，规划字段               |
+| `role`          | string | 角色：`user`、`vip`、`admin` |
+| `channel_name`  | string | VIP 用户专属模型渠道名称           |
+| `invite_code`   | string | 一次性邀请码，唯一索引              |
+| `invite_used_at` | string | 邀请码使用时间                  |
+| `credits`       | number | 算力点余额                    |
 | `aff_code`      | string | 用户自己的邀请码，唯一索引，规划字段       |
 | `aff_count`     | number | 已邀请用户数量，冗余统计字段，规划字段      |
-| `inviter_id`    | string | 邀请人用户 ID，规划字段            |
+| `inviter_id`    | string | 邀请人用户 ID                  |
 | `github_id`     | string | GitHub 用户 ID，规划字段        |
 | `linux_do_id`   | string | Linux.do 用户 ID，规划字段      |
 | `wechat_id`     | string | 微信用户 ID，规划字段             |
@@ -118,12 +122,13 @@
 | 字段                | 类型       | 说明             |
 |-------------------|----------|----------------|
 | `availableModels` | string[] | 系统可用模型列表       |
+| `modelCosts` | object[] | 模型调用算力点消耗配置；图片模型可分别配置 `imageCredits1k`、`imageCredits2k`、`imageCredits4k` |
 | `defaultModel`    | string   | 默认模型           |
 | `defaultImageModel` | string | 默认图片模型         |
 | `defaultVideoModel` | string | 默认视频模型         |
 | `defaultTextModel` | string  | 默认文本模型         |
 | `systemPrompt`    | string   | 系统提示词          |
-| `allowCustomChannel` | bool    | 是否允许用户自定义渠道，默认允许，关闭后前端只提供走后端渠道的模式 |
+| `allowCustomChannel` | bool    | 是否允许管理员自定义本地直连渠道，默认允许；普通用户和 VIP 用户始终走后端渠道 |
 
 `private.value` 当前字段：
 
@@ -141,6 +146,7 @@
 | `baseUrl` | string  | 渠道接口地址   |
 | `apiKey` | string   | 渠道密钥     |
 | `models` | string[] | 渠道可用模型列表 |
+| `mode`   | string   | 请求模式：`openai` 标准模式、`codex` Codex/中转兼容模式 |
 | `weight` | number   | 渠道权重，同一模型命中多个渠道时按权重随机 |
 | `enabled` | bool    | 是否启用     |
 | `remark` | string   | 备注       |
@@ -171,13 +177,13 @@
 
 ### credit_logs
 
-用户算力点变更流水表。充值、消费、订阅扣减、邀请奖励、后台调整等余额变化都写入该表。
+用户算力点变更流水表。当前用于后台调整、AI 调用扣费和失败返还等余额变化记录。
 
 | 字段           | 类型     | 说明                       |
 |--------------|--------|--------------------------|
 | `id`         | string | 主键                       |
 | `user_id`    | string | 关联用户 ID                  |
-| `type`       | string | 类型：充值、消费、订阅扣减、邀请奖励、后台调整等 |
+| `type`       | string | 类型：`admin_adjust`、`ai_consume`、`ai_refund` |
 | `amount`     | number | 本次变动数量，增加为正，扣减为负         |
 | `balance`    | number | 变动后的用户算力点余额              |
 | `related_id` | string | 关联订单、任务或日志 ID，可为空        |

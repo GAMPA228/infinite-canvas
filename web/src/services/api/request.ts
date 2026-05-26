@@ -1,4 +1,5 @@
 import axios from "axios";
+import { AUTH_TOKEN_KEY } from "@/services/api/auth";
 
 export type ApiParams = Record<string, string | string[] | number | number[] | undefined>;
 
@@ -27,7 +28,7 @@ export async function apiGet<T>(url: string, params?: ApiParams, token?: string)
         url,
         method: "GET",
         params: params || undefined,
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: authHeaders(token),
     });
 }
 
@@ -38,7 +39,7 @@ export async function apiPost<T>(url: string, body?: unknown, token?: string) {
         data: body ?? {},
         headers: {
             "Content-Type": "application/json",
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...authHeaders(token),
         },
     });
 }
@@ -47,8 +48,22 @@ export async function apiDelete<T>(url: string, token?: string) {
     return apiRequest<T>({
         url,
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers: authHeaders(token),
     });
+}
+
+function authHeaders(token?: string) {
+    const resolvedToken = token || readStoredToken();
+    return resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : undefined;
+}
+
+function readStoredToken() {
+    if (typeof window === "undefined") return "";
+    try {
+        return JSON.parse(window.localStorage.getItem(AUTH_TOKEN_KEY) || "{}")?.state?.token || "";
+    } catch {
+        return "";
+    }
 }
 
 async function apiRequest<T>(config: { url: string; method: "GET" | "POST" | "DELETE"; params?: ApiParams; data?: unknown; headers?: Record<string, string> }) {

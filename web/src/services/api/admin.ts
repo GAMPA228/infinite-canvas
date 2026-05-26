@@ -1,4 +1,5 @@
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
+import type { UserRole } from "@/services/api/auth";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
 
 export type AdminPromptCategory = {
@@ -82,12 +83,91 @@ export async function deleteAdminAsset(token: string, id: string) {
     return apiDelete<boolean>(`/api/admin/assets/${encodeURIComponent(id)}`, token);
 }
 
+export type AdminUser = {
+    id: string;
+    username: string;
+    role: UserRole;
+    credits: number;
+    channelName: string;
+    inviteCode: string;
+    inviteUsedAt: string;
+    inviterId: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type AdminUserListResponse = {
+    items: AdminUser[];
+    total: number;
+};
+
+export type AdminUserQuery = {
+    keyword?: string;
+    type?: string;
+    page?: number;
+    pageSize?: number;
+};
+
+export async function fetchAdminUsers(token: string, query: AdminUserQuery = {}) {
+    return apiGet<AdminUserListResponse>("/api/admin/users", compactApiParams(query), token);
+}
+
+export async function saveAdminUser(token: string, user: Partial<AdminUser> & { password?: string }) {
+    return apiPost<AdminUser>("/api/admin/users", user, token);
+}
+
+export async function deleteAdminUser(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/users/${encodeURIComponent(id)}`, token);
+}
+
+export async function adjustAdminUserCredits(token: string, id: string, credits: number) {
+    return apiPost<AdminUser>(`/api/admin/users/${encodeURIComponent(id)}/credits`, { credits }, token);
+}
+
+export type AdminCreditLog = {
+    id: string;
+    userId: string;
+    type: "admin_adjust" | "ai_consume" | "ai_refund" | string;
+    amount: number;
+    balance: number;
+    relatedId: string;
+    remark: string;
+    extra: string;
+    createdAt: string;
+};
+
+export type AdminCreditLogListResponse = {
+    items: AdminCreditLog[];
+    total: number;
+};
+
+export async function fetchAdminCreditLogs(token: string, query: AdminUserQuery = {}) {
+    return apiGet<AdminCreditLogListResponse>("/api/admin/credit-logs", compactApiParams(query), token);
+}
+
+export async function saveAdminCreditLog(token: string, log: Partial<AdminCreditLog>) {
+    return apiPost<AdminCreditLog>("/api/admin/credit-logs", log, token);
+}
+
+export async function deleteAdminCreditLog(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/credit-logs/${encodeURIComponent(id)}`, token);
+}
+
+export type AdminModelCost = {
+    model: string;
+    credits: number;
+    imageCredits1k: number;
+    imageCredits2k: number;
+    imageCredits4k: number;
+};
+
 export type AdminModelChannel = {
     protocol: "openai";
     name: string;
     baseUrl: string;
     apiKey: string;
     models: string[];
+    mode: "openai" | "codex";
     weight: number;
     enabled: boolean;
     remark: string;
@@ -95,6 +175,7 @@ export type AdminModelChannel = {
 
 export type AdminPublicModelChannelSettings = {
     availableModels: string[];
+    modelCosts: AdminModelCost[];
     defaultModel: string;
     defaultImageModel: string;
     defaultVideoModel: string;

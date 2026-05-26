@@ -13,6 +13,7 @@ type UserStore = {
     setSession: (token: string, user: AuthUser) => void;
     clearSession: () => void;
     hydrateUser: () => Promise<void>;
+    refreshUser: () => Promise<void>;
     login: (payload: AuthPayload) => Promise<AuthUser>;
     register: (payload: AuthPayload) => Promise<AuthUser>;
 };
@@ -42,6 +43,16 @@ export const useUserStore = create<UserStore>()(
                     set({ user, isReady: true, isLoading: false });
                 } catch {
                     set({ token: "", user: null, isReady: true, isLoading: false });
+                }
+            },
+            refreshUser: async () => {
+                const token = get().token;
+                if (!token) return;
+                try {
+                    const user = await fetchCurrentUser(token);
+                    if (user.role !== "guest") set({ user });
+                } catch {
+                    // 保持当前会话，避免普通业务请求成功后因刷新失败误退出。
                 }
             },
             login: async (payload) => {
