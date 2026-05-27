@@ -509,7 +509,7 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={12}>
-                                <Form.Item name="sizeStrategy" label="尺寸策略" extra="普通渠道建议保持精确比例；VIP 中转失败时可选高成功率安全尺寸。">
+                                <Form.Item name="sizeStrategy" label="尺寸策略" extra="普通渠道建议保持精确比例；VIP 中转失败时可选高成功率安全尺寸，2K/4K 会映射到已验证更稳的方图/横图/竖图尺寸。">
                                     <Select options={sizeStrategyOptions.map((item) => ({ label: item.label, value: item.value }))} />
                                 </Form.Item>
                             </Col>

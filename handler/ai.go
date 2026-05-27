@@ -408,9 +408,6 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 			streamErr = &aiError{message}
 			return nil, false
 		}
-		if payload, ok := normalizeCodexImagePayload([]byte(eventBody)); ok {
-			return payload, true
-		}
 		object, _ := event["object"].(string)
 		eventType, _ := event["type"].(string)
 		if object == "image.generation.result" || object == "image.edit.result" || eventType == "image_generation.completed" || eventType == "image_edit.completed" {
@@ -421,9 +418,10 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 		if eventType == "image_generation.partial_image" || eventType == "image_edit.partial_image" {
 			if item := codexImageItem(event); item != nil {
 				lastPartial = []map[string]any{item}
-				payload, err := json.Marshal(map[string]any{"data": lastPartial})
-				return payload, err == nil
 			}
+		}
+		if payload, ok := normalizeCodexImagePayload([]byte(eventBody)); ok && eventType != "image_generation.partial_image" && eventType != "image_edit.partial_image" {
+			return payload, true
 		}
 		return nil, false
 	}
@@ -1270,18 +1268,18 @@ func safeImageSizeByTier(aspect string, tier string) string {
 	case "4k":
 		switch orientation {
 		case "landscape":
-			return "3840x2560"
+			return "3840x2160"
 		case "portrait":
-			return "2560x3840"
+			return "2160x3840"
 		default:
-			return "4096x4096"
+			return "2880x2880"
 		}
 	case "2k":
 		switch orientation {
 		case "landscape":
-			return "2048x1365"
+			return "2048x1536"
 		case "portrait":
-			return "1365x2048"
+			return "1536x2048"
 		default:
 			return "2048x2048"
 		}
