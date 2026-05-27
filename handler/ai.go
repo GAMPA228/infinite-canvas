@@ -442,6 +442,10 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 		}
 		if !strings.HasPrefix(line, "data:") {
 			rawLines = append(rawLines, line)
+			if message := parseAIErrorPayload([]byte(line)); message != "" {
+				streamErr = &aiError{message}
+				continue
+			}
 			if payload, ok := codexImagePayloadFromString(line); ok {
 				return payload, nil
 			}
@@ -549,6 +553,9 @@ func readCodexStreamPayload(reader io.Reader) ([]byte, error) {
 func parseCodexStreamPayloadBody(body []byte) ([]byte, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, &aiError{"Codex 流式接口未返回最终图片数据"}
+	}
+	if message := parseAIErrorPayload(body); message != "" {
+		return nil, &aiError{message}
 	}
 	if payload, ok := normalizeCodexImagePayload(bytes.TrimSpace(body)); ok {
 		return payload, nil
