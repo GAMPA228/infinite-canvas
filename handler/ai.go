@@ -322,6 +322,7 @@ func runCodexCurlStream(targetURL string, apiKey string, body []byte, contentTyp
 		return payload, nil
 	}
 	if message := strings.TrimSpace(stderr.String()); message != "" {
+		log.Printf("AI codex curl stream stderr: url=%s stderr=%s", targetURL, strings.TrimSpace(string(limitBytes([]byte(message), 4096))))
 		return nil, &aiError{message}
 	}
 	return nil, err
@@ -351,6 +352,8 @@ func runCodexCurlJSON(targetURL string, apiKey string, body []byte, contentType 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()
+	rawBody := strings.TrimSpace(string(limitBytes(output, 4096)))
+	stderrBody := strings.TrimSpace(string(limitBytes(stderr.Bytes(), 4096)))
 	if payload, ok := normalizeCodexImagePayload(bytes.TrimSpace(output)); ok {
 		return payload, nil
 	}
@@ -358,12 +361,20 @@ func runCodexCurlJSON(targetURL string, apiKey string, body []byte, contentType 
 		return payload, nil
 	}
 	if message := parseAIErrorPayload(output); message != "" {
+		log.Printf("AI codex json fallback upstream error: url=%s err=%v stderr=%s body=%s", targetURL, err, stderrBody, rawBody)
 		return nil, &aiError{message}
 	}
 	if err != nil {
-		return nil, &aiError{strings.TrimSpace(stderr.String())}
+		log.Printf("AI codex json fallback curl failed: url=%s err=%v stderr=%s body=%s", targetURL, err, stderrBody, rawBody)
+		if stderrBody != "" {
+			return nil, &aiError{stderrBody}
+		}
+		if rawBody != "" {
+			return nil, &aiError{rawBody}
+		}
+		return nil, &aiError{"Upstream request failed"}
 	}
-	log.Printf("AI codex json fallback unrecognized response: url=%s body=%s", targetURL, strings.TrimSpace(string(limitBytes(output, 4096))))
+	log.Printf("AI codex json fallback unrecognized response: url=%s stderr=%s body=%s", targetURL, stderrBody, rawBody)
 	return nil, &aiError{"接口没有返回图片"}
 }
 
