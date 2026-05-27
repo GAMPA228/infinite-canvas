@@ -26,6 +26,7 @@ export type AiConfig = {
 };
 
 export const CONFIG_STORE_KEY = "infinite-canvas:ai_config_store";
+let publicSettingsRequestSeq = 0;
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
@@ -99,12 +100,17 @@ export const useConfigStore = create<ConfigStore>()(
                     },
                 })),
             loadPublicSettings: async () => {
-                if (get().isPublicSettingsLoading) return;
+                const requestSeq = ++publicSettingsRequestSeq;
                 set({ isPublicSettingsLoading: true });
                 try {
-                    set({ publicSettings: await apiGet<AdminPublicSettings>("/api/settings") });
+                    const publicSettings = await apiGet<AdminPublicSettings>("/api/settings");
+                    if (requestSeq === publicSettingsRequestSeq) {
+                        set({ publicSettings });
+                    }
                 } finally {
-                    set({ isPublicSettingsLoading: false });
+                    if (requestSeq === publicSettingsRequestSeq) {
+                        set({ isPublicSettingsLoading: false });
+                    }
                 }
             },
             isAiConfigReady: (config, model) => isAiConfigReady(config, model),

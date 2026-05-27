@@ -180,6 +180,9 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Mode == "" {
 			setting.Channels[i].Mode = "openai"
 		}
+		if setting.Channels[i].SizeStrategy == "" {
+			setting.Channels[i].SizeStrategy = "exact"
+		}
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
 		}
@@ -339,6 +342,9 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	}
 	if channel.Mode == "" {
 		channel.Mode = "openai"
+	}
+	if channel.SizeStrategy == "" {
+		channel.SizeStrategy = "exact"
 	}
 	if channel.Weight <= 0 {
 		channel.Weight = 1

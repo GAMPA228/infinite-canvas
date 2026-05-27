@@ -11,15 +11,16 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
-	Protocol string   `json:"protocol"`
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	APIKey   string   `json:"apiKey"`
-	Models   []string `json:"models"`
-	Mode     string   `json:"mode"`
-	Weight   int      `json:"weight"`
-	Enabled  bool     `json:"enabled"`
-	Remark   string   `json:"remark"`
+	Protocol     string   `json:"protocol"`
+	Name         string   `json:"name"`
+	BaseURL      string   `json:"baseUrl"`
+	APIKey       string   `json:"apiKey"`
+	Models       []string `json:"models"`
+	Mode         string   `json:"mode"`
+	SizeStrategy string   `json:"sizeStrategy"`
+	Weight       int      `json:"weight"`
+	Enabled      bool     `json:"enabled"`
+	Remark       string   `json:"remark"`
 }
 
 // ModelCost 模型调用算力点配置。

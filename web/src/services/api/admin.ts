@@ -168,6 +168,7 @@ export type AdminModelChannel = {
     apiKey: string;
     models: string[];
     mode: "openai" | "codex";
+    sizeStrategy: "exact" | "compatible" | "safe";
     weight: number;
     enabled: boolean;
     remark: string;

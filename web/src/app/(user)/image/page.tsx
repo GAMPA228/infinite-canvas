@@ -11,7 +11,7 @@ import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/c
 import { useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { requestEdit, requestGeneration } from "@/services/api/image";
+import { requestEdit, requestGeneration, requestPromptOptimization } from "@/services/api/image";
 import { uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -90,8 +90,11 @@ export default function ImagePage() {
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [optimizingPrompt, setOptimizingPrompt] = useState(false);
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
+    const promptModelOptions = effectiveConfig.models.filter((item) => item && item !== model && item !== "gpt-image-2");
+    const promptModel = promptModelOptions.includes(effectiveConfig.textModel) ? effectiveConfig.textModel : promptModelOptions[0] || "";
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
     const canUsePremiumQuality = canUsePremiumImageQuality(userRole);
@@ -309,6 +312,34 @@ export default function ImagePage() {
         void runGenerationSlot(index, snapshot).catch(() => {});
     };
 
+    const optimizePrompt = async () => {
+        const text = prompt.trim();
+        if (!text) {
+            message.error("请输入需要优化的提示词");
+            return;
+        }
+        if (!promptModel) {
+            message.warning("请先选择提示词模型");
+            return;
+        }
+        if (!isAiConfigReady(effectiveConfig, promptModel)) {
+            message.warning("请先完成配置");
+            openConfigDialog(true);
+            return;
+        }
+        setOptimizingPrompt(true);
+        try {
+            const optimized = await requestPromptOptimization(effectiveConfig, text, promptModel);
+            setPrompt(optimized);
+            message.success("提示词已优化");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "提示词优化失败");
+        } finally {
+            setOptimizingPrompt(false);
+            void refreshUser();
+        }
+    };
+
     return (
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
             <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -356,8 +387,11 @@ export default function ImagePage() {
                                     </div>
                                 </div>
                                 <Input.TextArea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={7} placeholder="描述画面主体、风格、构图、光线和用途" />
-                                <div className="mt-2 flex justify-end">
-                                    <Button size="small" icon={<Sparkles className="size-3.5" />} onClick={() => message.info("提示词优化功能待接入")}>
+                                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                                    <div className="min-w-[180px] flex-1 sm:max-w-[260px]">
+                                        <ModelPicker config={{ ...effectiveConfig, models: promptModelOptions }} value={promptModel} onChange={(value) => updateConfig("textModel", value)} fullWidth placeholder="提示词模型" onMissingConfig={() => openConfigDialog(false)} />
+                                    </div>
+                                    <Button size="small" icon={<Sparkles className="size-3.5" />} loading={optimizingPrompt} disabled={optimizingPrompt || !prompt.trim() || !promptModelOptions.length} onClick={() => void optimizePrompt()}>
                                         提示词优化
                                     </Button>
                                 </div>

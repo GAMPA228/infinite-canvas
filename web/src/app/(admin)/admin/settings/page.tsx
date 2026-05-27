@@ -39,7 +39,12 @@ const emptySettings: AdminSettings = {
     },
     private: { channels: [], promptSync: { enabled: true, cron: "*/5 * * * *" } },
 };
-const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], mode: "openai", weight: 1, enabled: true, remark: "" };
+const emptyChannel: AdminModelChannel = { protocol: "openai", name: "", baseUrl: "", apiKey: "", models: [], mode: "openai", sizeStrategy: "exact", weight: 1, enabled: true, remark: "" };
+const sizeStrategyOptions = [
+    { label: "精确比例", value: "exact" },
+    { label: "中转兼容", value: "compatible" },
+    { label: "高成功率安全尺寸", value: "safe" },
+] as const;
 
 type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
@@ -362,54 +367,7 @@ export default function AdminSettingsPage() {
                                             dataSource={publicModels.map((model) => ({ model, ...modelCostCredits(modelCosts, model) }))}
                                             columns={[
                                                 { title: "模型", dataIndex: "model" },
-                                                {
-                                                    title: "1K 图片",
-                                                    dataIndex: "imageCredits1k",
-                                                    width: 180,
-                                                    render: (_, item) => (
-                                                        <InputNumber
-                                                            min={0}
-                                                            step={1}
-                                                            precision={0}
-                                                            className="!w-full"
-                                                            value={item.imageCredits1k}
-                                                            addonAfter="点"
-                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits1k", Number(value) || 0)}
-                                                        />
-                                                    ),
-                                                },
-                                                {
-                                                    title: "2K 图片",
-                                                    dataIndex: "imageCredits2k",
-                                                    width: 180,
-                                                    render: (_, item) => (
-                                                        <InputNumber
-                                                            min={0}
-                                                            step={1}
-                                                            precision={0}
-                                                            className="!w-full"
-                                                            value={item.imageCredits2k}
-                                                            addonAfter="点"
-                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits2k", Number(value) || 0)}
-                                                        />
-                                                    ),
-                                                },
-                                                {
-                                                    title: "4K 图片",
-                                                    dataIndex: "imageCredits4k",
-                                                    width: 180,
-                                                    render: (_, item) => (
-                                                        <InputNumber
-                                                            min={0}
-                                                            step={1}
-                                                            precision={0}
-                                                            className="!w-full"
-                                                            value={item.imageCredits4k}
-                                                            addonAfter="点"
-                                                            onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits4k", Number(value) || 0)}
-                                                        />
-                                                    ),
-                                                },
+                                                ...modelCostColumns(form, setModelCosts),
                                             ]}
                                         />
                                     </Col>
@@ -457,6 +415,7 @@ export default function AdminSettingsPage() {
                                         { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
                                         { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value || "openai"}</Tag> },
                                         { title: "模式", dataIndex: "mode", width: 130, render: (value) => <Tag color={value === "codex" ? "purple" : "default"}>{value === "codex" ? "Codex兼容" : "标准"}</Tag> },
+                                        { title: "尺寸策略", dataIndex: "sizeStrategy", width: 150, render: (value) => <Tag color={value === "safe" ? "green" : value === "compatible" ? "blue" : "default"}>{sizeStrategyLabel(value)}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
@@ -550,6 +509,11 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={12}>
+                                <Form.Item name="sizeStrategy" label="尺寸策略" extra="普通渠道建议保持精确比例；VIP 中转失败时可选高成功率安全尺寸。">
+                                    <Select options={sizeStrategyOptions.map((item) => ({ label: item.label, value: item.value }))} />
+                                </Form.Item>
+                            </Col>
+                            <Col span={12}>
                                 <Form.Item name="weight" label="权重">
                                     <InputNumber min={1} step={1} className="!w-full" />
                                 </Form.Item>
@@ -565,8 +529,8 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item name="apiKey" label="API Key" rules={[{ required: true, message: "请输入 API Key" }]}>
-                                    <Input.Password />
+                                <Form.Item name="apiKey" label="API Key" extra={editingChannelIndex === null ? undefined : "已保存的 Key 不会回显；留空保存会继续使用数据库中的原 Key。"} rules={editingChannelIndex === null ? [{ required: true, message: "请输入 API Key" }] : []}>
+                                    <Input.Password placeholder={editingChannelIndex === null ? "请输入 API Key" : "留空则沿用已保存的 API Key"} />
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
@@ -713,6 +677,7 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         apiKey: item.apiKey || "",
         models: item.models || [],
         mode: item.mode === "codex" ? "codex" : "openai",
+        sizeStrategy: item.sizeStrategy === "safe" || item.sizeStrategy === "compatible" ? item.sizeStrategy : "exact",
         weight: Math.max(1, Number(item.weight) || 1),
         enabled: item.enabled !== false,
         remark: item.remark || "",
@@ -721,24 +686,63 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
 
 function normalizeModelCostItem(item: Partial<AdminModelCost>): AdminModelCost {
     const base = Math.max(0, Number(item.credits) || 0);
+    const imageModel = isImageModel(item.model || "");
     return {
         model: item.model || "",
         credits: base,
-        imageCredits1k: Math.max(0, Number(item.imageCredits1k) || base || 1),
-        imageCredits2k: Math.max(0, Number(item.imageCredits2k) || base || 2),
-        imageCredits4k: Math.max(0, Number(item.imageCredits4k) || base || 3),
+        imageCredits1k: imageModel ? Math.max(0, Number(item.imageCredits1k) || base || 1) : 0,
+        imageCredits2k: imageModel ? Math.max(0, Number(item.imageCredits2k) || base || 2) : 0,
+        imageCredits4k: imageModel ? Math.max(0, Number(item.imageCredits4k) || base || 3) : 0,
     };
 }
 
 function defaultModelCost(model: string): AdminModelCost {
-    return { model, credits: 0, imageCredits1k: 1, imageCredits2k: 2, imageCredits4k: 3 };
+    return isImageModel(model) ? { model, credits: 0, imageCredits1k: 1, imageCredits2k: 2, imageCredits4k: 3 } : { model, credits: 1, imageCredits1k: 0, imageCredits2k: 0, imageCredits4k: 0 };
 }
 
 function modelCostCredits(items: AdminSettings["public"]["modelChannel"]["modelCosts"], model: string) {
     return items.find((item) => item.model === model) || defaultModelCost(model);
 }
 
-function setModelCost(form: any, setModelCosts: (items: AdminModelCost[]) => void, model: string, key: "imageCredits1k" | "imageCredits2k" | "imageCredits4k", credits: number) {
+function modelCostColumns(form: any, setModelCosts: (items: AdminModelCost[]) => void) {
+    return [
+        {
+            title: "文本/对话",
+            dataIndex: "credits",
+            width: 180,
+            render: (_: unknown, item: AdminModelCost) =>
+                isImageModel(item.model) ? (
+                    <Typography.Text type="secondary">—</Typography.Text>
+                ) : (
+                    <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.credits} addonAfter="点" onChange={(value) => setModelCost(form, setModelCosts, item.model, "credits", Number(value) || 0)} />
+                ),
+        },
+        {
+            title: "1K 图片",
+            dataIndex: "imageCredits1k",
+            width: 180,
+            render: (_: unknown, item: AdminModelCost) => (isImageModel(item.model) ? <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.imageCredits1k} addonAfter="点" onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits1k", Number(value) || 0)} /> : <Typography.Text type="secondary">—</Typography.Text>),
+        },
+        {
+            title: "2K 图片",
+            dataIndex: "imageCredits2k",
+            width: 180,
+            render: (_: unknown, item: AdminModelCost) => (isImageModel(item.model) ? <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.imageCredits2k} addonAfter="点" onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits2k", Number(value) || 0)} /> : <Typography.Text type="secondary">—</Typography.Text>),
+        },
+        {
+            title: "4K 图片",
+            dataIndex: "imageCredits4k",
+            width: 180,
+            render: (_: unknown, item: AdminModelCost) => (isImageModel(item.model) ? <InputNumber min={0} step={1} precision={0} className="!w-full" value={item.imageCredits4k} addonAfter="点" onChange={(value) => setModelCost(form, setModelCosts, item.model, "imageCredits4k", Number(value) || 0)} /> : <Typography.Text type="secondary">—</Typography.Text>),
+        },
+    ];
+}
+
+function isImageModel(model: string) {
+    return model.toLowerCase().includes("image");
+}
+
+function setModelCost(form: any, setModelCosts: (items: AdminModelCost[]) => void, model: string, key: keyof Omit<AdminModelCost, "model">, credits: number) {
     const current = (form.getFieldValue(["public", "modelChannel", "modelCosts"]) || []) as AdminSettings["public"]["modelChannel"]["modelCosts"];
     const next = current.filter((item) => item.model !== model);
     const item = normalizeModelCostItem(current.find((value) => value.model === model) || defaultModelCost(model));
@@ -771,6 +775,10 @@ function modelSummary(models: string[]) {
     if (!models.length) return "未配置模型";
     const preview = models.slice(0, 3).join(", ");
     return models.length > 3 ? `${models.length} 个模型：${preview}...` : preview;
+}
+
+function sizeStrategyLabel(value: AdminModelChannel["sizeStrategy"]) {
+    return sizeStrategyOptions.find((item) => item.value === value)?.label || "精确比例";
 }
 
 function parseTabJson(tab: "public", value: string): AdminSettings["public"] | null;

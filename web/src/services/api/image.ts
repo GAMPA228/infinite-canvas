@@ -19,6 +19,15 @@ type ImageApiResponse = {
     msg?: string;
 };
 
+type ResponsesApiResponse = {
+    output_text?: string;
+    output?: Array<{ content?: Array<{ text?: string; type?: string }>; type?: string }>;
+    choices?: Array<{ message?: { content?: string } }>;
+    error?: { message?: string };
+    code?: number;
+    msg?: string;
+};
+
 function resolveImageDataUrl(item: Record<string, unknown>) {
     if (typeof item.b64_json === "string" && item.b64_json) {
         return `data:image/png;base64,${item.b64_json}`;
@@ -68,11 +77,6 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
     if (deltaText) onDelta(deltaText);
 }
 
-function withSystemPrompt(config: AiConfig, prompt: string) {
-    const systemPrompt = config.systemPrompt.trim();
-    return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
-}
-
 function imageSizeByQuality(size?: string, quality?: string) {
     const value = (size || "auto").trim().toLowerCase();
     if (/^\d+x\d+$/.test(value)) return value;
@@ -85,6 +89,10 @@ function imageSizeByQuality(size?: string, quality?: string) {
         "4k": { "1:1": "4096x4096", "3:2": "3840x2560", "2:3": "2560x3840", "4:3": "3840x2880", "3:4": "2880x3840", "16:9": "3840x2160", "9:16": "2160x3840" },
     };
     return sizes[tier]?.[aspect] || size || "1024x1024";
+}
+
+function requestImageSize(config: AiConfig) {
+    return config.channelMode === "remote" ? config.size || "auto" : imageSizeByQuality(config.size, config.quality);
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -114,9 +122,21 @@ function authHeader() {
     return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function withSystemMessage(config: AiConfig, messages: ChatCompletionMessage[]) {
-    const systemPrompt = config.systemPrompt.trim();
-    return systemPrompt ? [{ role: "system" as const, content: systemPrompt }, ...messages] : messages;
+function parseResponsesText(payload: ResponsesApiResponse) {
+    if (typeof payload.code === "number" && payload.code !== 0) {
+        throw new Error(payload.msg || "请求失败");
+    }
+    if (payload.error?.message) {
+        throw new Error(payload.error.message);
+    }
+    if (typeof payload.output_text === "string" && payload.output_text.trim()) {
+        return payload.output_text.trim();
+    }
+    const outputText = payload.output?.flatMap((item) => item.content || []).map((item) => item.text || "").join("").trim();
+    if (outputText) return outputText;
+    const chatText = payload.choices?.[0]?.message?.content?.trim();
+    if (chatText) return chatText;
+    throw new Error("接口没有返回优化结果");
 }
 
 export async function requestGeneration(config: AiConfig, prompt: string) {
@@ -126,10 +146,10 @@ export async function requestGeneration(config: AiConfig, prompt: string) {
             aiApiUrl(config, "/images/generations"),
             {
                 model: config.model,
-                prompt: withSystemPrompt(config, prompt),
+                prompt,
                 n,
                 quality: config.quality || undefined,
-                size: imageSizeByQuality(config.size, config.quality),
+                size: requestImageSize(config),
                 response_format: "b64_json",
             },
             {
@@ -146,13 +166,13 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const formData = new FormData();
     formData.set("model", config.model);
-    formData.set("prompt", withSystemPrompt(config, prompt));
+    formData.set("prompt", prompt);
     formData.set("n", String(n));
     formData.set("response_format", "b64_json");
     if (config.quality) {
         formData.set("quality", config.quality);
     }
-    formData.set("size", imageSizeByQuality(config.size, config.quality));
+    formData.set("size", requestImageSize(config));
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
     files.forEach((file) => formData.append("image", file));
 
@@ -174,7 +194,7 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
             aiApiUrl(config, "/chat/completions"),
             {
                 model: config.model,
-                messages: withSystemMessage(config, messages),
+                messages,
                 stream: true,
             },
             {
@@ -223,6 +243,25 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
         throw new Error(readAxiosError(error, "请求失败"));
     }
     return answer || "没有返回内容";
+}
+
+export async function requestPromptOptimization(config: AiConfig, prompt: string, model: string) {
+    try {
+        const response = await axios.post<ResponsesApiResponse>(
+            aiApiUrl(config, "/responses"),
+            {
+                model,
+                instructions: config.systemPrompt || undefined,
+                input: prompt,
+            },
+            {
+                headers: aiHeaders(config, "application/json"),
+            },
+        );
+        return parseResponsesText(response.data);
+    } catch (error) {
+        throw new Error(readAxiosError(error, "提示词优化失败"));
+    }
 }
 
 export async function fetchImageModels(config: AiConfig) {

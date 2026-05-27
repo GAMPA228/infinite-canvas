@@ -38,6 +38,10 @@ func AIChatCompletions(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/chat/completions")
 }
 
+func AIResponses(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/responses")
+}
+
 func AIVideos(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/videos")
 }
@@ -96,7 +100,10 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		FailError(w, err)
 		return
 	}
-	body, contentType = normalizeAIProxyBody(path, channel.Mode, body, contentType)
+	body, contentType = normalizeAIProxyBody(path, channel.Mode, channel.SizeStrategy, body, contentType)
+	if path == "/images/generations" || path == "/images/edits" {
+		logAIImageRequest(channel.Name, channel.Mode, channel.SizeStrategy, modelName, body, contentType)
+	}
 	targetURL := service.BuildModelChannelURL(channel, path)
 	isCodexImage := channel.Mode == "codex" && (path == "/images/generations" || path == "/images/edits")
 	request, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(body))
@@ -367,12 +374,18 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 	var rawLines []string
 	var lastPartial []map[string]any
 	var streamErr error
+	var eventName string
 	flushEvent := func() ([]byte, bool) {
 		if len(dataLines) == 0 {
+			if eventName == "error" {
+				streamErr = &aiError{"上游返回流式错误事件"}
+				eventName = ""
+			}
 			return nil, false
 		}
 		eventBody := strings.Join(dataLines, "\n")
 		dataLines = nil
+		eventName = ""
 		var event map[string]any
 		if json.Unmarshal([]byte(eventBody), &event) != nil {
 			if payload, ok := codexImagePayloadFromString(eventBody); ok {
@@ -410,6 +423,10 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 			if payload, ok := flushEvent(); ok {
 				return payload, nil
 			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
@@ -838,6 +855,70 @@ func readAIRequestCount(body []byte, contentType string) int {
 	return count
 }
 
+func logAIImageRequest(channelName string, mode string, strategy string, modelName string, body []byte, contentType string) {
+	size := readAIStringField(body, contentType, "size")
+	quality := readAIStringField(body, contentType, "quality")
+	stream := readAIStringField(body, contentType, "stream")
+	partialImages := readAIStringField(body, contentType, "partial_images")
+	tier := imageQualityTier(quality)
+	if quality == "" {
+		tier = imageTierFromPixelSize(size)
+	}
+	log.Printf(
+		"AI image request normalized: channel=%s mode=%s model=%s size=%s tier=%s strategy=%s stream=%s partial_images=%s",
+		channelName,
+		mode,
+		modelName,
+		size,
+		tier,
+		normalizeSizeStrategy(strategy),
+		stream,
+		partialImages,
+	)
+}
+
+func imageTierFromPixelSize(size string) string {
+	width, height, ok := parsePixelImageSize(size)
+	if !ok {
+		return "1k"
+	}
+	pixels := width * height
+	if pixels > 4194304 {
+		return "4k"
+	}
+	if pixels > 1572864 {
+		return "2k"
+	}
+	return "1k"
+}
+
+func readAIStringField(body []byte, contentType string, key string) string {
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		_, params, err := mime.ParseMediaType(contentType)
+		if err != nil {
+			return ""
+		}
+		form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(32 << 20)
+		if err != nil {
+			return ""
+		}
+		defer form.RemoveAll()
+		if values := form.Value[key]; len(values) > 0 {
+			return values[0]
+		}
+		return ""
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return ""
+	}
+	value := payload[key]
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(value)
+}
+
 func aiCostTier(path string, body []byte, contentType string) string {
 	if path != "/images/generations" && path != "/images/edits" {
 		return ""
@@ -845,10 +926,10 @@ func aiCostTier(path string, body []byte, contentType string) string {
 	return imageQualityTier(readAIQuality(body, contentType))
 }
 
-func normalizeAIProxyBody(path string, mode string, body []byte, contentType string) ([]byte, string) {
+func normalizeAIProxyBody(path string, mode string, sizeStrategy string, body []byte, contentType string) ([]byte, string) {
 	isImageRequest := path == "/images/generations" || path == "/images/edits"
 	if isImageRequest {
-		body, contentType = normalizeImageSizeBody(body, contentType)
+		body, contentType = normalizeImageSizeBody(body, contentType, sizeStrategy)
 	}
 	if mode != "codex" || !isImageRequest {
 		return body, contentType
@@ -867,34 +948,34 @@ func normalizeAIProxyBody(path string, mode string, body []byte, contentType str
 	return body, contentType
 }
 
-func normalizeImageSizeBody(body []byte, contentType string) ([]byte, string) {
+func normalizeImageSizeBody(body []byte, contentType string, strategy string) ([]byte, string) {
 	if strings.HasPrefix(contentType, "multipart/form-data") {
-		nextBody, nextContentType, ok := normalizeImageSizeMultipartBody(body, contentType)
+		nextBody, nextContentType, ok := normalizeImageSizeMultipartBody(body, contentType, strategy)
 		if ok {
 			return nextBody, nextContentType
 		}
 		return body, contentType
 	}
-	nextBody, ok := normalizeImageSizeJSONBody(body)
+	nextBody, ok := normalizeImageSizeJSONBody(body, strategy)
 	if ok {
 		return nextBody, contentType
 	}
 	return body, contentType
 }
 
-func normalizeImageSizeJSONBody(body []byte) ([]byte, bool) {
+func normalizeImageSizeJSONBody(body []byte, strategy string) ([]byte, bool) {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
 		return nil, false
 	}
 	size, _ := payload["size"].(string)
 	quality, _ := payload["quality"].(string)
-	payload["size"] = normalizeImageSizeByQuality(size, quality)
+	payload["size"] = normalizeImageSizeByQuality(size, quality, strategy)
 	nextBody, err := json.Marshal(payload)
 	return nextBody, err == nil
 }
 
-func normalizeImageSizeMultipartBody(body []byte, contentType string) ([]byte, string, bool) {
+func normalizeImageSizeMultipartBody(body []byte, contentType string, strategy string) ([]byte, string, bool) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return nil, "", false
@@ -916,14 +997,14 @@ func normalizeImageSizeMultipartBody(body []byte, contentType string) ([]byte, s
 	for key, values := range form.Value {
 		for _, value := range values {
 			if key == "size" {
-				value = normalizeImageSizeByQuality(value, quality)
+				value = normalizeImageSizeByQuality(value, quality, strategy)
 				hasSize = true
 			}
 			_ = writer.WriteField(key, value)
 		}
 	}
 	if !hasSize {
-		_ = writer.WriteField("size", normalizeImageSizeByQuality("", quality))
+		_ = writer.WriteField("size", normalizeImageSizeByQuality("", quality, strategy))
 	}
 	for key, files := range form.File {
 		for _, fileHeader := range files {
@@ -1077,10 +1158,10 @@ func normalizeCodexMultipartBody(body []byte, contentType string) ([]byte, strin
 }
 
 func normalizeCodexImageSize(size string) string {
-	return normalizeImageSizeByQuality(size, "")
+	return normalizeImageSizeByQuality(size, "", "exact")
 }
 
-func normalizeImageSizeByQuality(size string, quality string) string {
+func normalizeImageSizeByQuality(size string, quality string, strategy string) string {
 	value := strings.ToLower(strings.TrimSpace(size))
 	if isPixelImageSize(value) {
 		return value
@@ -1091,6 +1172,14 @@ func normalizeImageSizeByQuality(size string, quality string) string {
 	}
 	aspect, _, _ = strings.Cut(aspect, "-")
 	tier := imageQualityTier(quality)
+	switch normalizeSizeStrategy(strategy) {
+	case "safe":
+		return safeImageSizeByTier(aspect, tier)
+	case "compatible":
+		if size := compatibleImageSizeByTier(aspect, tier); size != "" {
+			return size
+		}
+	}
 
 	switch tier {
 	case "4k":
@@ -1148,6 +1237,141 @@ func normalizeImageSizeByQuality(size string, quality string) string {
 	return size
 }
 
+func normalizeSizeStrategy(strategy string) string {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "safe", "compatible":
+		return strings.ToLower(strings.TrimSpace(strategy))
+	default:
+		return "exact"
+	}
+}
+
+func safeImageSizeByTier(aspect string, tier string) string {
+	orientation := imageOrientation(aspect)
+	switch tier {
+	case "4k":
+		switch orientation {
+		case "landscape":
+			return "3840x2560"
+		case "portrait":
+			return "2560x3840"
+		default:
+			return "4096x4096"
+		}
+	case "2k":
+		switch orientation {
+		case "landscape":
+			return "2048x1365"
+		case "portrait":
+			return "1365x2048"
+		default:
+			return "2048x2048"
+		}
+	default:
+		switch orientation {
+		case "landscape":
+			return "1536x1024"
+		case "portrait":
+			return "1024x1536"
+		default:
+			return "1024x1024"
+		}
+	}
+}
+
+func compatibleImageSizeByTier(aspect string, tier string) string {
+	ratioWidth, ratioHeight, ok := parseImageAspect(aspect)
+	if !ok {
+		return ""
+	}
+	targetRatio := float64(ratioWidth) / float64(ratioHeight)
+	pixelBudget := 1572864
+	if tier == "2k" {
+		pixelBudget = 4194304
+	} else if tier == "4k" {
+		pixelBudget = 8294400
+	}
+	bestWidth, bestHeight, bestPixels := 0, 0, 0
+	for width := 16; width <= 3840; width += 16 {
+		idealHeight := float64(width) / targetRatio
+		for _, height := range []int{floorToMultiple(idealHeight, 16), ceilToMultiple(idealHeight, 16)} {
+			if height < 16 || height > 3840 {
+				continue
+			}
+			pixels := width * height
+			if pixels > pixelBudget || pixels < 655360 {
+				continue
+			}
+			if maxFloat(float64(width)/float64(height), float64(height)/float64(width)) > 3 {
+				continue
+			}
+			actualRatio := float64(width) / float64(height)
+			if absFloat(actualRatio-targetRatio)/targetRatio > 0.01 {
+				continue
+			}
+			if pixels > bestPixels {
+				bestWidth, bestHeight, bestPixels = width, height, pixels
+			}
+		}
+	}
+	if bestPixels == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%dx%d", bestWidth, bestHeight)
+}
+
+func imageOrientation(aspect string) string {
+	width, height, ok := parseImageAspect(aspect)
+	if !ok || width == height {
+		return "square"
+	}
+	if width > height {
+		return "landscape"
+	}
+	return "portrait"
+}
+
+func parseImageAspect(aspect string) (int, int, bool) {
+	parts := strings.Split(aspect, ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	var width, height int
+	if _, err := fmt.Sscan(parts[0], &width); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscan(parts[1], &height); err != nil {
+		return 0, 0, false
+	}
+	return width, height, width > 0 && height > 0
+}
+
+func floorToMultiple(value float64, multiple int) int {
+	return int(value/float64(multiple)) * multiple
+}
+
+func ceilToMultiple(value float64, multiple int) int {
+	result := int(value/float64(multiple)) * multiple
+	if float64(result) < value {
+		result += multiple
+	}
+	return result
+}
+
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func maxFloat(a float64, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func imageQualityTier(quality string) string {
 	switch strings.ToLower(strings.TrimSpace(quality)) {
 	case "medium":
@@ -1160,8 +1384,19 @@ func imageQualityTier(quality string) string {
 }
 
 func isPixelImageSize(size string) bool {
+	_, _, ok := parsePixelImageSize(size)
+	return ok
+}
+
+func parsePixelImageSize(size string) (int, int, bool) {
 	parts := strings.Split(size, "x")
-	return len(parts) == 2 && isPositiveInteger(parts[0]) && isPositiveInteger(parts[1])
+	if len(parts) != 2 || !isPositiveInteger(parts[0]) || !isPositiveInteger(parts[1]) {
+		return 0, 0, false
+	}
+	var width, height int
+	_, widthErr := fmt.Sscan(parts[0], &width)
+	_, heightErr := fmt.Sscan(parts[1], &height)
+	return width, height, widthErr == nil && heightErr == nil && width > 0 && height > 0
 }
 
 func isPositiveInteger(value string) bool {

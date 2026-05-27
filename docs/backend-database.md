@@ -147,6 +147,7 @@
 | `apiKey` | string   | 渠道密钥     |
 | `models` | string[] | 渠道可用模型列表 |
 | `mode`   | string   | 请求模式：`openai` 标准模式、`codex` Codex/中转兼容模式 |
+| `sizeStrategy` | string | 图片尺寸策略：`exact` 精确比例、`compatible` 中转兼容算法、`safe` 高成功率安全尺寸；默认 `exact` |
 | `weight` | number   | 渠道权重，同一模型命中多个渠道时按权重随机 |
 | `enabled` | bool    | 是否启用     |
 | `remark` | string   | 备注       |
