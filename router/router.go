@@ -21,6 +21,11 @@ func New() *gin.Engine {
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
 	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
 	api.POST("/v1/images/generations", middleware.OptionalAuth, gin.WrapF(handler.AIImagesGenerations))
+	api.POST("/v1/images/generations/async", middleware.OptionalAuth, gin.WrapF(handler.AIImagesGenerationsAsync))
+	api.POST("/v1/images/edits/async", middleware.OptionalAuth, gin.WrapF(handler.AIImagesEditsAsync))
+	api.GET("/v1/images/tasks/:id", middleware.OptionalAuth, func(c *gin.Context) {
+		handler.AIImageTask(c.Writer, c.Request, c.Param("id"))
+	})
 	api.POST("/v1/images/edits", middleware.OptionalAuth, gin.WrapF(handler.AIImagesEdits))
 	api.POST("/v1/chat/completions", middleware.OptionalAuth, gin.WrapF(handler.AIChatCompletions))
 	api.POST("/v1/responses", middleware.OptionalAuth, gin.WrapF(handler.AIResponses))

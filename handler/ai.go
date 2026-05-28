@@ -13,10 +13,42 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/basketikun/infinite-canvas/model"
 	"github.com/basketikun/infinite-canvas/service"
 )
+
+type aiImageTask struct {
+	ID          string          `json:"id"`
+	UserID      string          `json:"-"`
+	Status      string          `json:"status"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	CreatedAt   int64           `json:"createdAt"`
+	UpdatedAt   int64           `json:"updatedAt"`
+	CompletedAt int64           `json:"completedAt,omitempty"`
+}
+
+type aiImageTaskRunner struct {
+	ID          string
+	User        model.AuthUser
+	Path        string
+	ModelName   string
+	ChannelName string
+	Mode        string
+	TargetURL   string
+	APIKey      string
+	Body        []byte
+	ContentType string
+	Credits     int
+}
+
+var aiImageTasks = struct {
+	sync.RWMutex
+	items map[string]*aiImageTask
+}{items: map[string]*aiImageTask{}}
 
 func AIImagesGenerations(w http.ResponseWriter, r *http.Request) {
 	if !canUseImageQuality(r) {
@@ -24,6 +56,38 @@ func AIImagesGenerations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyAIRequest(w, r, "/images/generations")
+}
+
+func AIImagesGenerationsAsync(w http.ResponseWriter, r *http.Request) {
+	if !canUseImageQuality(r) {
+		Fail(w, "请升级用户套餐")
+		return
+	}
+	startAIImageTask(w, r, "/images/generations")
+}
+
+func AIImagesEditsAsync(w http.ResponseWriter, r *http.Request) {
+	if !canUseImageQuality(r) {
+		Fail(w, "请升级用户套餐")
+		return
+	}
+	startAIImageTask(w, r, "/images/edits")
+}
+
+func AIImageTask(w http.ResponseWriter, r *http.Request, id string) {
+	user, _ := service.UserFromContext(r.Context())
+	aiImageTasks.RLock()
+	task := aiImageTasks.items[id]
+	aiImageTasks.RUnlock()
+	if task == nil {
+		Fail(w, "任务不存在")
+		return
+	}
+	if task.UserID != "" && user.ID != task.UserID && user.Role != model.UserRoleAdmin {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	OK(w, task)
 }
 
 func AIImagesEdits(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +202,132 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	copyAIResponse(w, request, refund)
+}
+
+func startAIImageTask(w http.ResponseWriter, r *http.Request, path string) {
+	body, contentType, modelName, err := readAIRequest(r)
+	if err != nil {
+		log.Printf("AI async task read failed: %v", err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	user, _ := service.UserFromContext(r.Context())
+	credits, err := service.ModelCostByTier(modelName, aiCostTier(path, body, contentType))
+	if err != nil {
+		log.Printf("AI async task read model cost failed: model=%s err=%v", modelName, err)
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	credits *= readAIRequestCount(body, contentType)
+	if credits > 0 && user.ID == "" {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	channel, err := service.SelectUserModelChannel(user, modelName)
+	if err != nil {
+		log.Printf("AI async task select channel failed: model=%s err=%v", modelName, err)
+		FailError(w, err)
+		return
+	}
+	body, contentType = normalizeAIProxyBody(path, channel.Mode, channel.SizeStrategy, body, contentType)
+	logAIImageRequest(channel.Name, channel.Mode, channel.SizeStrategy, modelName, body, contentType)
+	if credits > 0 {
+		if err := service.ConsumeUserCredits(user.ID, modelName, credits, path); err != nil {
+			FailError(w, err)
+			return
+		}
+	}
+	now := time.Now().Unix()
+	task := &aiImageTask{ID: newAIImageTaskID(), UserID: user.ID, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	aiImageTasks.Lock()
+	aiImageTasks.items[task.ID] = task
+	aiImageTasks.Unlock()
+	go runAIImageTask(aiImageTaskRunner{
+		ID:          task.ID,
+		User:        user,
+		Path:        path,
+		ModelName:   modelName,
+		ChannelName: channel.Name,
+		Mode:        channel.Mode,
+		TargetURL:   service.BuildModelChannelURL(channel, path),
+		APIKey:      channel.APIKey,
+		Body:        body,
+		ContentType: contentType,
+		Credits:     credits,
+	})
+	OK(w, map[string]string{"id": task.ID, "status": task.Status})
+}
+
+func runAIImageTask(task aiImageTaskRunner) {
+	log.Printf("AI async image task started: id=%s channel=%s mode=%s model=%s", task.ID, task.ChannelName, task.Mode, task.ModelName)
+	var payload []byte
+	var err error
+	if task.Mode == "codex" {
+		payload, err = runCodexCurlStreamWithRetry(context.Background(), task.TargetURL, task.APIKey, task.Body, task.ContentType)
+	} else {
+		payload, err = runOpenAIImageRequest(context.Background(), task.TargetURL, task.APIKey, task.Body, task.ContentType)
+	}
+	if err != nil {
+		log.Printf("AI async image task failed: id=%s url=%s err=%v", task.ID, task.TargetURL, err)
+		if task.Credits > 0 {
+			if refundErr := service.RefundUserCredits(task.User.ID, task.ModelName, task.Credits, task.Path); refundErr != nil {
+				log.Printf("AI async image task refund credits failed: id=%s user=%s model=%s credits=%d err=%v", task.ID, task.User.ID, task.ModelName, task.Credits, refundErr)
+			}
+		}
+		updateAIImageTask(task.ID, "failed", nil, friendlyCodexImageError(err, task.Body, task.ContentType))
+		return
+	}
+	log.Printf("AI async image task completed: id=%s", task.ID)
+	updateAIImageTask(task.ID, "success", payload, "")
+}
+
+func updateAIImageTask(id string, status string, result []byte, message string) {
+	now := time.Now().Unix()
+	aiImageTasks.Lock()
+	defer aiImageTasks.Unlock()
+	task := aiImageTasks.items[id]
+	if task == nil {
+		return
+	}
+	task.Status = status
+	task.UpdatedAt = now
+	task.CompletedAt = now
+	task.Error = message
+	if len(result) > 0 {
+		task.Result = json.RawMessage(result)
+	}
+}
+
+func newAIImageTaskID() string {
+	return fmt.Sprintf("imgtask_%d", time.Now().UnixNano())
+}
+
+func runOpenAIImageRequest(ctx context.Context, targetURL string, apiKey string, body []byte, contentType string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Authorization", "Bearer "+apiKey)
+	request.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		request.Header.Set("Content-Type", contentType)
+	}
+	response, err := aiProxyHTTPClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	payload, _ := io.ReadAll(response.Body)
+	if response.StatusCode >= http.StatusBadRequest {
+		if message := parseAIErrorPayload(payload); message != "" {
+			return nil, &aiError{message}
+		}
+		return nil, &aiError{"AI 接口请求失败"}
+	}
+	if normalized, err := parseCodexStreamPayloadBody(payload); err == nil {
+		return normalized, nil
+	}
+	return payload, nil
 }
 
 func copyAIImageResponse(w http.ResponseWriter, request *http.Request, body []byte, contentType string, onFailure func()) {

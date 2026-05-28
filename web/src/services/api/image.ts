@@ -19,6 +19,21 @@ type ImageApiResponse = {
     msg?: string;
 };
 
+type ImageTaskResponse = {
+    id?: string;
+    status?: "pending" | "success" | "failed";
+    result?: ImageApiResponse;
+    error?: string;
+    code?: number;
+    msg?: string;
+    data?: {
+        id?: string;
+        status?: "pending" | "success" | "failed";
+        result?: ImageApiResponse;
+        error?: string;
+    };
+};
+
 type ResponsesApiResponse = {
     output_text?: string;
     output?: Array<{ content?: Array<{ text?: string; type?: string }>; type?: string }>;
@@ -99,6 +114,10 @@ function aiApiUrl(config: AiConfig, path: string) {
     return config.channelMode === "remote" ? `/api/v1${path}` : buildApiUrl(config.baseUrl, path);
 }
 
+function shouldUseAsyncImageTask(config: AiConfig) {
+    return config.channelMode === "remote";
+}
+
 function aiHeaders(config: AiConfig, contentType?: string) {
     return config.channelMode === "remote"
         ? {
@@ -141,17 +160,21 @@ function parseResponsesText(payload: ResponsesApiResponse) {
 
 export async function requestGeneration(config: AiConfig, prompt: string) {
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
+    const body = {
+        model: config.model,
+        prompt,
+        n,
+        quality: config.quality || undefined,
+        size: requestImageSize(config),
+        response_format: "b64_json",
+    };
     try {
+        if (shouldUseAsyncImageTask(config)) {
+            return requestAsyncGeneration(config, body);
+        }
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(config, "/images/generations"),
-            {
-                model: config.model,
-                prompt,
-                n,
-                quality: config.quality || undefined,
-                size: requestImageSize(config),
-                response_format: "b64_json",
-            },
+            body,
             {
                 headers: aiHeaders(config, "application/json"),
             },
@@ -177,6 +200,9 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
     files.forEach((file) => formData.append("image", file));
 
     try {
+        if (shouldUseAsyncImageTask(config)) {
+            return requestAsyncEdit(config, formData);
+        }
         const response = await axios.post<ImageApiResponse>(aiApiUrl(config, "/images/edits"), formData, { headers: aiHeaders(config) });
         return parseImagePayload(response.data);
     } catch (error) {
@@ -261,6 +287,41 @@ export async function requestPromptOptimization(config: AiConfig, prompt: string
         return parseResponsesText(response.data);
     } catch (error) {
         throw new Error(readAxiosError(error, "提示词优化失败"));
+    }
+}
+
+async function requestAsyncGeneration(config: AiConfig, body: Record<string, unknown>) {
+    const created = await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/generations/async"), body, { headers: aiHeaders(config, "application/json") });
+    return pollImageTask(config, created.data);
+}
+
+async function requestAsyncEdit(config: AiConfig, body: FormData) {
+    const created = await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/edits/async"), body, { headers: aiHeaders(config) });
+    return pollImageTask(config, created.data);
+}
+
+async function pollImageTask(config: AiConfig, createdTask: ImageTaskResponse) {
+    if (typeof createdTask.code === "number" && createdTask.code !== 0) {
+        throw new Error(createdTask.msg || "请求失败");
+    }
+    const taskId = createdTask.data?.id || createdTask.id;
+    if (!taskId) throw new Error("异步任务创建失败");
+    for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const response = await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${taskId}`), { headers: aiHeaders(config) });
+        if (typeof response.data.code === "number" && response.data.code !== 0) {
+            throw new Error(response.data.msg || "请求失败");
+        }
+        const task = response.data.data || response.data;
+        if (task.status === "success") {
+            return parseImagePayload(task.result || {});
+        }
+        if (task.status === "failed") {
+            throw new Error(task.error || "生成失败");
+        }
+        if (task.status !== "pending") {
+            throw new Error("任务状态异常");
+        }
     }
 }
 
