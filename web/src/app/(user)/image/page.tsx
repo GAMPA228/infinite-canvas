@@ -142,6 +142,10 @@ export default function ImagePage() {
     };
 
     const generate = async () => {
+        if (running) {
+            message.warning("当前已有生图任务进行中，请等待完成");
+            return;
+        }
         const text = prompt.trim();
         if (!text) {
             message.error("请输入生图提示词");
@@ -233,6 +237,10 @@ export default function ImagePage() {
     };
 
     const createSession = () => {
+        if (running) {
+            message.warning("当前已有生图任务进行中，请等待完成");
+            return;
+        }
         setPrompt("");
         setReferences([]);
         setResults([]);
@@ -259,6 +267,10 @@ export default function ImagePage() {
     const refreshLogs = async () => setLogs(await readStoredLogs(logOwnerKey));
 
     const previewGenerationLog = async (log: GenerationLog) => {
+        if (running) {
+            message.warning("当前已有生图任务进行中，请等待完成");
+            return;
+        }
         setPreviewLog(log);
         setLogsOpen(false);
         const images = await Promise.all(
@@ -305,6 +317,10 @@ export default function ImagePage() {
     };
 
     const retryResult = (index: number) => {
+        if (running) {
+            message.warning("当前已有生图任务进行中，请等待完成");
+            return;
+        }
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
         setPreviewLog(null);
@@ -350,6 +366,7 @@ export default function ImagePage() {
                         activeLogId={previewLog?.id}
                         onSelectedLogIdsChange={setSelectedLogIds}
                         onCreateSession={createSession}
+                        createDisabled={running}
                         onDeleteSelected={() => setDeleteConfirmOpen(true)}
                         onPreviewLog={(log) => void previewGenerationLog(log)}
                     />
@@ -501,6 +518,7 @@ export default function ImagePage() {
                     activeLogId={previewLog?.id}
                     onSelectedLogIdsChange={setSelectedLogIds}
                     onCreateSession={createSession}
+                    createDisabled={running}
                     onDeleteSelected={() => setDeleteConfirmOpen(true)}
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
@@ -641,6 +659,7 @@ function LogPanel({
     activeLogId,
     onSelectedLogIdsChange,
     onCreateSession,
+    createDisabled,
     onDeleteSelected,
     onPreviewLog,
 }: {
@@ -649,6 +668,7 @@ function LogPanel({
     activeLogId?: string;
     onSelectedLogIdsChange: (ids: string[]) => void;
     onCreateSession: () => void;
+    createDisabled?: boolean;
     onDeleteSelected: () => void;
     onPreviewLog: (log: GenerationLog) => void;
 }) {
@@ -664,7 +684,7 @@ function LogPanel({
                 <Tag className="m-0">{logs.length}</Tag>
             </div>
             <div className="mb-4 flex flex-wrap gap-2">
-                <Button size="small" icon={<Plus className="size-3.5" />} onClick={onCreateSession}>
+                <Button size="small" icon={<Plus className="size-3.5" />} disabled={createDisabled} onClick={onCreateSession}>
                     新建
                 </Button>
                 <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
