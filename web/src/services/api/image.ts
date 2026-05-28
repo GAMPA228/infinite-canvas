@@ -34,6 +34,12 @@ type ImageTaskResponse = {
     };
 };
 
+type ApiEnvelope<T> = {
+    code?: number;
+    msg?: string;
+    data?: T;
+};
+
 type ResponsesApiResponse = {
     output_text?: string;
     output?: Array<{ content?: Array<{ text?: string; type?: string }>; type?: string }>;
@@ -291,16 +297,16 @@ export async function requestPromptOptimization(config: AiConfig, prompt: string
 }
 
 async function requestAsyncGeneration(config: AiConfig, body: Record<string, unknown>) {
-    const created = await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/generations/async"), body, { headers: aiHeaders(config, "application/json") });
+    const created = await axios.post<ApiEnvelope<ImageTaskResponse> | ImageTaskResponse>(aiApiUrl(config, "/images/generations/async"), body, { headers: aiHeaders(config, "application/json") });
     return pollImageTask(config, created.data);
 }
 
 async function requestAsyncEdit(config: AiConfig, body: FormData) {
-    const created = await axios.post<ImageTaskResponse>(aiApiUrl(config, "/images/edits/async"), body, { headers: aiHeaders(config) });
+    const created = await axios.post<ApiEnvelope<ImageTaskResponse> | ImageTaskResponse>(aiApiUrl(config, "/images/edits/async"), body, { headers: aiHeaders(config) });
     return pollImageTask(config, created.data);
 }
 
-async function pollImageTask(config: AiConfig, createdTask: ImageTaskResponse) {
+async function pollImageTask(config: AiConfig, createdTask: ApiEnvelope<ImageTaskResponse> | ImageTaskResponse) {
     if (typeof createdTask.code === "number" && createdTask.code !== 0) {
         throw new Error(createdTask.msg || "请求失败");
     }
@@ -308,7 +314,7 @@ async function pollImageTask(config: AiConfig, createdTask: ImageTaskResponse) {
     if (!taskId) throw new Error("异步任务创建失败");
     for (;;) {
         await new Promise((resolve) => setTimeout(resolve, 3000));
-        const response = await axios.get<ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${taskId}`), { headers: aiHeaders(config) });
+        const response = await axios.get<ApiEnvelope<ImageTaskResponse> | ImageTaskResponse>(aiApiUrl(config, `/images/tasks/${taskId}`), { headers: aiHeaders(config) });
         if (typeof response.data.code === "number" && response.data.code !== 0) {
             throw new Error(response.data.msg || "请求失败");
         }
