@@ -129,7 +129,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		}
 	}
 	if isCodexImage {
-		copyAICodexFetchStreamResponse(w, targetURL, channel.APIKey, body, contentType, refund)
+		copyAICodexFetchStreamResponse(w, r.Context(), targetURL, channel.APIKey, body, contentType, refund)
 		return
 	}
 	request.Header.Set("Accept", "application/json")
@@ -174,7 +174,7 @@ func retryAIImageStreamFallback(w http.ResponseWriter, request *http.Request, bo
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	copyAICodexFetchStreamResponse(w, request.URL.String(), apiKey, streamBody, streamContentType, onFailure)
+	copyAICodexFetchStreamResponse(w, request.Context(), request.URL.String(), apiKey, streamBody, streamContentType, onFailure)
 }
 
 func shouldRetryImageStreamFallback(statusCode int) bool {
@@ -258,12 +258,20 @@ func copyAICodexStreamResponse(w http.ResponseWriter, request *http.Request) {
 	_, _ = w.Write(payload)
 }
 
-func copyAICodexFetchStreamResponse(w http.ResponseWriter, targetURL string, apiKey string, body []byte, contentType string, onFailure func()) {
-	payload, err := runCodexCurlStream(targetURL, apiKey, body, contentType)
+func copyAICodexFetchStreamResponse(w http.ResponseWriter, requestContext context.Context, targetURL string, apiKey string, body []byte, contentType string, onFailure func()) {
+	payload, err := runCodexCurlStreamWithRetry(requestContext, targetURL, apiKey, body, contentType)
 	if err != nil {
+		if is4KImageRequest(body, contentType) && isRetryableCodexStreamError(err) {
+			log.Printf("AI codex fetch stream failed after large image retries, skip non-stream fallback: url=%s err=%v", targetURL, err)
+			if onFailure != nil {
+				onFailure()
+			}
+			Fail(w, friendlyCodexImageError(err, body, contentType))
+			return
+		}
 		log.Printf("AI codex fetch stream failed, retry non-stream fallback: url=%s err=%v", targetURL, err)
 		if fallbackBody, fallbackContentType, ok := withoutImageStreamBody(body, contentType); ok {
-			if fallbackPayload, fallbackErr := runCodexCurlJSON(targetURL, apiKey, fallbackBody, fallbackContentType); fallbackErr == nil {
+			if fallbackPayload, fallbackErr := runCodexCurlJSON(requestContext, targetURL, apiKey, fallbackBody, fallbackContentType); fallbackErr == nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(fallbackPayload)
@@ -275,7 +283,7 @@ func copyAICodexFetchStreamResponse(w http.ResponseWriter, targetURL string, api
 		if onFailure != nil {
 			onFailure()
 		}
-		Fail(w, err.Error())
+		Fail(w, friendlyCodexImageError(err, body, contentType))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -283,9 +291,43 @@ func copyAICodexFetchStreamResponse(w http.ResponseWriter, targetURL string, api
 	_, _ = w.Write(payload)
 }
 
-func runCodexCurlStream(targetURL string, apiKey string, body []byte, contentType string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+func runCodexCurlStreamWithRetry(requestContext context.Context, targetURL string, apiKey string, body []byte, contentType string) ([]byte, error) {
+	maxAttempts := 1
+	allowPartialFallback := true
+	if is4KImageRequest(body, contentType) {
+		maxAttempts = 4
+		allowPartialFallback = false
+	} else if isLargeImageRequest(body, contentType) {
+		maxAttempts = 2
+	}
+	log.Printf("AI codex curl stream attempts: url=%s max=%d size=%s quality=%s", targetURL, maxAttempts, readAIStringField(body, contentType, "size"), readAIStringField(body, contentType, "quality"))
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		startedAt := time.Now()
+		payload, err := runCodexCurlStream(requestContext, targetURL, apiKey, body, contentType, allowPartialFallback)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("AI codex curl stream retry succeeded: url=%s attempt=%d elapsed=%s", targetURL, attempt, time.Since(startedAt).Round(time.Second))
+			}
+			return payload, nil
+		}
+		lastErr = err
+		log.Printf("AI codex curl stream attempt failed: url=%s attempt=%d/%d elapsed=%s err=%v", targetURL, attempt, maxAttempts, time.Since(startedAt).Round(time.Second), err)
+		if requestContext.Err() != nil || !isRetryableCodexStreamError(err) || attempt == maxAttempts {
+			break
+		}
+		if !sleepWithContext(requestContext, codexStreamRetryDelay(attempt)) {
+			break
+		}
+		log.Printf("AI codex curl stream retrying: url=%s attempt=%d/%d err=%v", targetURL, attempt+1, maxAttempts, err)
+	}
+	return nil, lastErr
+}
+
+func runCodexCurlStream(requestContext context.Context, targetURL string, apiKey string, body []byte, contentType string, allowPartialFallback bool) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(requestContext, 30*time.Minute)
 	defer cancel()
+	startedAt := time.Now()
 	args := []string{
 		"-k",
 		"-N",
@@ -315,21 +357,26 @@ func runCodexCurlStream(targetURL string, apiKey string, body []byte, contentTyp
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	payload, err := readCodexCurlStreamPayload(stdout)
+	payload, err := readCodexCurlStreamPayload(stdout, allowPartialFallback)
 	_ = cmd.Process.Kill()
 	_ = cmd.Wait()
 	if err == nil {
+		log.Printf("AI codex curl stream completed: url=%s elapsed=%s", targetURL, time.Since(startedAt).Round(time.Second))
 		return payload, nil
 	}
 	if message := strings.TrimSpace(stderr.String()); message != "" {
 		log.Printf("AI codex curl stream stderr: url=%s stderr=%s", targetURL, strings.TrimSpace(string(limitBytes([]byte(message), 4096))))
 		return nil, &aiError{message}
 	}
+	if ctx.Err() != nil {
+		log.Printf("AI codex curl stream context done: url=%s err=%v", targetURL, ctx.Err())
+		return nil, ctx.Err()
+	}
 	return nil, err
 }
 
-func runCodexCurlJSON(targetURL string, apiKey string, body []byte, contentType string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+func runCodexCurlJSON(requestContext context.Context, targetURL string, apiKey string, body []byte, contentType string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(requestContext, 30*time.Minute)
 	defer cancel()
 	args := []string{
 		"-k",
@@ -378,7 +425,7 @@ func runCodexCurlJSON(targetURL string, apiKey string, body []byte, contentType 
 	return nil, &aiError{"接口没有返回图片"}
 }
 
-func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
+func readCodexCurlStreamPayload(reader io.Reader, allowPartialFallback bool) ([]byte, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64*1024), 128*1024*1024)
 	var dataLines []string
@@ -405,6 +452,7 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 			return nil, false
 		}
 		if message := codexStreamErrorMessage(event); message != "" {
+			log.Printf("AI codex stream error event received: type=%s message=%s", fmt.Sprint(event["type"]), message)
 			streamErr = &aiError{message}
 			return nil, false
 		}
@@ -412,11 +460,13 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 		eventType, _ := event["type"].(string)
 		if object == "image.generation.result" || object == "image.edit.result" || eventType == "image_generation.completed" || eventType == "image_edit.completed" {
 			if payload, ok := normalizeCodexImagePayload([]byte(eventBody)); ok {
+				log.Printf("AI codex stream completed event received: type=%s object=%s", eventType, object)
 				return payload, true
 			}
 		}
 		if eventType == "image_generation.partial_image" || eventType == "image_edit.partial_image" {
 			if item := codexImageItem(event); item != nil {
+				log.Printf("AI codex stream partial event received: type=%s", eventType)
 				lastPartial = []map[string]any{item}
 			}
 		}
@@ -439,6 +489,9 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 			continue
 		}
 		if !strings.HasPrefix(line, "data:") {
+			if strings.HasPrefix(line, ":") {
+				continue
+			}
 			rawLines = append(rawLines, line)
 			if message := parseAIErrorPayload([]byte(line)); message != "" {
 				streamErr = &aiError{message}
@@ -458,9 +511,12 @@ func readCodexCurlStreamPayload(reader io.Reader) ([]byte, error) {
 	if payload, ok := flushEvent(); ok {
 		return payload, nil
 	}
-	if len(lastPartial) > 0 {
+	if len(lastPartial) > 0 && streamErr == nil && allowPartialFallback {
 		payload, err := json.Marshal(map[string]any{"data": lastPartial})
 		return payload, err
+	}
+	if len(lastPartial) > 0 && streamErr == nil {
+		return nil, &aiError{"Codex 流式接口只返回了预览图，未返回最终图片数据"}
 	}
 	if len(rawLines) > 0 {
 		rawBody := strings.Join(rawLines, "\n")
@@ -869,6 +925,81 @@ func readAIRequestCount(body []byte, contentType string) int {
 		return 1
 	}
 	return count
+}
+
+func isLargeImageRequest(body []byte, contentType string) bool {
+	size := readAIStringField(body, contentType, "size")
+	width, height, ok := parsePixelImageSize(size)
+	if ok && (width*height >= 2048*2048 || width >= 3000 || height >= 3000) {
+		return true
+	}
+	return imageQualityTier(readAIStringField(body, contentType, "quality")) == "4k"
+}
+
+func is4KImageRequest(body []byte, contentType string) bool {
+	size := readAIStringField(body, contentType, "size")
+	width, height, ok := parsePixelImageSize(size)
+	if ok && (width*height > 4194304 || width >= 3000 || height >= 3000) {
+		return true
+	}
+	return imageQualityTier(readAIStringField(body, contentType, "quality")) == "4k"
+}
+
+func isRetryableCodexStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "stream disconnected before image generation completed") ||
+		strings.Contains(message, "stream disconnected before completion") ||
+		strings.Contains(message, "只返回了预览图") ||
+		strings.Contains(message, "stream error:") ||
+		strings.Contains(message, "protocol_error") ||
+		strings.Contains(message, "internal_error") ||
+		strings.Contains(message, "unexpected eof") ||
+		strings.Contains(message, "connection reset") ||
+		strings.Contains(message, "timeout")
+}
+
+func isStreamDisconnectedCodexError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "stream disconnected before image generation completed") ||
+		strings.Contains(message, "stream disconnected before completion")
+}
+
+func friendlyCodexImageError(err error, body []byte, contentType string) string {
+	if err == nil {
+		return "AI 接口请求失败"
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		return "AI 接口请求失败"
+	}
+	if isRetryableCodexStreamError(err) && is4KImageRequest(body, contentType) {
+		return "4K 生成中断，未返回最终图片，请稍后重试"
+	}
+	return message
+}
+
+func codexStreamRetryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return 3 * time.Second
+	}
+	return time.Duration(attempt*5) * time.Second
+}
+
+func sleepWithContext(ctx context.Context, duration time.Duration) bool {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func logAIImageRequest(channelName string, mode string, strategy string, modelName string, body []byte, contentType string) {
