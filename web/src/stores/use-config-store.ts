@@ -63,19 +63,21 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const channelMode = isAdmin && modelChannel?.allowCustomChannel ? config.channelMode : "remote";
     if (channelMode === "local" || !modelChannel) return { ...config, channelMode };
     const models = modelChannel.availableModels || [];
-    const model = models.includes(config.model) ? config.model : modelChannel.defaultModel;
-    const imageModel = models.includes(config.imageModel) ? config.imageModel : modelChannel.defaultImageModel || modelChannel.defaultModel;
-    const videoModel = models.includes(config.videoModel) ? config.videoModel : modelChannel.defaultVideoModel || modelChannel.defaultModel || "sora-2";
-    const textModel = models.includes(config.textModel) ? config.textModel : modelChannel.defaultTextModel || modelChannel.defaultModel;
-    const fallbackModel = models[0] || config.model;
+    const fallbackModel = models[0] || modelChannel.defaultModel || config.model;
+    const pickModel = (saved: string, preferred: string) => {
+        if (!models.length) return preferred || saved || fallbackModel;
+        if (models.includes(saved)) return saved;
+        if (models.includes(preferred)) return preferred;
+        return fallbackModel;
+    };
     return {
         ...config,
         channelMode,
         models,
-        model: models.includes(model) ? model : fallbackModel,
-        imageModel: models.includes(imageModel) ? imageModel : fallbackModel,
-        videoModel: models.includes(videoModel) ? videoModel : fallbackModel,
-        textModel: models.includes(textModel) ? textModel : fallbackModel,
+        model: pickModel(config.model, modelChannel.defaultModel),
+        imageModel: pickModel(config.imageModel, modelChannel.defaultImageModel || modelChannel.defaultModel),
+        videoModel: pickModel(config.videoModel, modelChannel.defaultVideoModel || modelChannel.defaultModel || "sora-2"),
+        textModel: pickModel(config.textModel, modelChannel.defaultTextModel || modelChannel.defaultModel),
         systemPrompt: modelChannel.systemPrompt,
     };
 }

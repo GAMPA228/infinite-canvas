@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { App, Button } from "antd";
 import { FileUp, Plus } from "lucide-react";
@@ -9,6 +9,7 @@ import { CanvasDeleteProjectsDialog } from "./components/canvas-delete-projects-
 import { CanvasProjectCard } from "./components/canvas-project-card";
 import { useCanvasStore, type CanvasProject } from "./stores/use-canvas-store";
 import { useCanvasUiStore } from "./stores/use-canvas-ui-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 type CanvasExportFile = {
     app: "infinite-canvas";
@@ -21,19 +22,35 @@ export default function CanvasPage() {
     const { message } = App.useApp();
     const router = useRouter();
     const inputRef = useRef<HTMLInputElement>(null);
+    const user = useUserStore((state) => state.user);
+    const ownerKey = user?.id || "";
     const hydrated = useCanvasStore((state) => state.hydrated);
-    const projects = useCanvasStore((state) => state.projects);
+    const allProjects = useCanvasStore((state) => state.projects);
+    const setActiveOwnerKey = useCanvasStore((state) => state.setActiveOwnerKey);
     const createProject = useCanvasStore((state) => state.createProject);
     const importProject = useCanvasStore((state) => state.importProject);
     const selectedIds = useCanvasUiStore((state) => state.selectedProjectIds);
     const setDeleteIds = useCanvasUiStore((state) => state.setDeleteProjectIds);
+    const projects = useMemo(() => (ownerKey ? allProjects.filter((project) => project.ownerKey === ownerKey || !project.ownerKey) : []), [allProjects, ownerKey]);
+    const projectIds = useMemo(() => new Set(projects.map((project) => project.id)), [projects]);
+
+    useEffect(() => {
+        if (hydrated && ownerKey) setActiveOwnerKey(ownerKey);
+    }, [hydrated, ownerKey, setActiveOwnerKey]);
+
+    useEffect(() => {
+        useCanvasUiStore.setState((state) => ({ selectedProjectIds: state.selectedProjectIds.filter((id) => projectIds.has(id)), deleteProjectIds: state.deleteProjectIds.filter((id) => projectIds.has(id)) }));
+    }, [projectIds]);
 
     const enterProject = (id: string) => {
         router.push(`/canvas/${id}`);
     };
-    const createAndEnter = () => enterProject(createProject(`画布 ${projects.length + 1}`));
+    const createAndEnter = () => {
+        if (!ownerKey) return;
+        enterProject(createProject(`画布 ${projects.length + 1}`, ownerKey));
+    };
     const importCanvas = async (file?: File) => {
-        if (!file) return;
+        if (!file || !ownerKey) return;
         try {
             const data = JSON.parse(await file.text()) as CanvasExportFile;
             enterProject(importProject(data.project));
@@ -55,7 +72,7 @@ export default function CanvasPage() {
                     </div>
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
-                            <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
+                            <Button disabled={!hydrated || !ownerKey} onClick={() => setDeleteIds(selectedIds.filter((id) => projectIds.has(id)))}>
                                 删除选中
                             </Button>
                         ) : null}
@@ -64,10 +81,10 @@ export default function CanvasPage() {
                                 删除全部
                             </Button>
                         ) : null}
-                        <Button disabled={!hydrated} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
+                        <Button disabled={!hydrated || !ownerKey} icon={<FileUp className="size-4" />} onClick={() => inputRef.current?.click()}>
                             导入画布
                         </Button>
-                        <Button disabled={!hydrated} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
+                        <Button disabled={!hydrated || !ownerKey} type="primary" icon={<Plus className="size-4" />} onClick={createAndEnter}>
                             新建画布
                         </Button>
                     </div>

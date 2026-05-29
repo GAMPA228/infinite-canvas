@@ -8,6 +8,7 @@ import type { CanvasAssistantSession, CanvasConnection, CanvasNodeData, Viewport
 
 export type CanvasProject = {
     id: string;
+    ownerKey?: string;
     title: string;
     createdAt: string;
     updatedAt: string;
@@ -21,8 +22,10 @@ export type CanvasProject = {
 
 type CanvasStore = {
     hydrated: boolean;
+    activeOwnerKey: string;
     projects: CanvasProject[];
-    createProject: (title?: string) => string;
+    setActiveOwnerKey: (ownerKey: string) => void;
+    createProject: (title?: string, ownerKey?: string) => string;
     importProject: (project: Partial<CanvasProject>) => string;
     openProject: (id: string) => CanvasProject | null;
     renameProject: (id: string, title: string) => void;
@@ -35,6 +38,10 @@ const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
 type PersistedCanvasState = Pick<CanvasStore, "projects">;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
+
+function isOwnerProject(project: CanvasProject, ownerKey: string) {
+    return Boolean(ownerKey) && (project.ownerKey === ownerKey || !project.ownerKey);
+}
 
 const canvasStorage: PersistStorage<CanvasStore> = {
     getItem: async (name) => {
@@ -61,12 +68,16 @@ export const useCanvasStore = create<CanvasStore>()(
     persist(
         (set, get) => ({
             hydrated: false,
+            activeOwnerKey: "",
             projects: [],
-            createProject: (title = "未命名画布") => {
+            setActiveOwnerKey: (activeOwnerKey) => set({ activeOwnerKey }),
+            createProject: (title = "未命名画布", ownerKey) => {
                 const now = new Date().toISOString();
                 const id = nanoid();
+                const projectOwnerKey = ownerKey || get().activeOwnerKey || "guest";
                 const project: CanvasProject = {
                     id,
+                    ownerKey: projectOwnerKey,
                     title,
                     createdAt: now,
                     updatedAt: now,
@@ -82,8 +93,10 @@ export const useCanvasStore = create<CanvasStore>()(
             },
             importProject: (source) => {
                 const now = new Date().toISOString();
+                const projectOwnerKey = get().activeOwnerKey || "guest";
                 const project: CanvasProject = {
                     id: nanoid(),
+                    ownerKey: projectOwnerKey,
                     title: source.title || "导入画布",
                     createdAt: source.createdAt || now,
                     updatedAt: now,
@@ -98,20 +111,21 @@ export const useCanvasStore = create<CanvasStore>()(
                 return project.id;
             },
             openProject: (id) => {
-                return get().projects.find((item) => item.id === id) || null;
+                const ownerKey = get().activeOwnerKey;
+                return get().projects.find((item) => item.id === id && isOwnerProject(item, ownerKey)) || null;
             },
             renameProject: (id, title) =>
                 set((state) => ({
-                    projects: state.projects.map((project) => (project.id === id ? { ...project, title: title.trim() || project.title, updatedAt: new Date().toISOString() } : project)),
+                    projects: state.projects.map((project) => (project.id === id && isOwnerProject(project, state.activeOwnerKey) ? { ...project, ownerKey: project.ownerKey || state.activeOwnerKey, title: title.trim() || project.title, updatedAt: new Date().toISOString() } : project)),
                 })),
             deleteProjects: (ids) =>
                 set((state) => {
-                    const projects = state.projects.filter((project) => !ids.includes(project.id));
+                    const projects = state.projects.filter((project) => !ids.includes(project.id) || !isOwnerProject(project, state.activeOwnerKey));
                     return { projects };
                 }),
             updateProject: (id, patch) =>
                 set((state) => ({
-                    projects: state.projects.map((project) => (project.id === id ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project)),
+                    projects: state.projects.map((project) => (project.id === id && isOwnerProject(project, state.activeOwnerKey) ? { ...project, ownerKey: project.ownerKey || state.activeOwnerKey, ...patch, updatedAt: new Date().toISOString() } : project)),
                 })),
         }),
         {
