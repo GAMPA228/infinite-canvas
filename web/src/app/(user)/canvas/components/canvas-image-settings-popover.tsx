@@ -47,10 +47,7 @@ export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChang
     const activeSize = config.size || "auto";
     const selectedAspect = aspectOptions.find((item) => item.value === activeSize);
     const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0], quality);
-    const selectAspect = (value: string) => {
-        const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.value || "auto");
-    };
+    const selectAspect = (value: string) => onConfigChange("size", value);
     const updateDimension = (key: "width" | "height", value: number | null) => {
         const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
         onConfigChange("size", `${key === "width" ? next : dimensions.width}x${key === "height" ? next : dimensions.height}`);

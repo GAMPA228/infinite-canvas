@@ -1700,9 +1700,7 @@ function InfiniteCanvasPage() {
                     await Promise.all(
                         targetIds.map(async (targetId) => {
                             try {
-                                const image = referenceImages.length
-                                    ? await requestEdit({ ...generationConfig, count: "1" }, effectivePrompt, referenceImages).then((items) => items[0])
-                                    : await requestGeneration({ ...generationConfig, count: "1" }, effectivePrompt).then((items) => items[0]);
+                                const image = await requestCanvasImage({ ...generationConfig, count: "1" }, effectivePrompt, targetIds.length === 1 ? referenceImages : []);
                                 const uploaded = await uploadImage(image.dataUrl);
                                 const imageSize = fitNodeSize(uploaded.width, uploaded.height, imageConfig.width, imageConfig.height);
                                 setNodes((prev) => {
@@ -1901,7 +1899,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
 
-                const image = useReferenceImages ? await requestEdit(generationConfig, prompt, retryReferenceImages).then((items) => items[0]) : await requestGeneration(generationConfig, prompt).then((items) => items[0]);
+                const image = await requestCanvasImage(generationConfig, prompt, useReferenceImages ? retryReferenceImages : []);
                 const uploadedImage = await uploadImage(image.dataUrl);
                 const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
                 const imageSize = fitNodeSize(uploadedImage.width, uploadedImage.height, imageConfig.width, imageConfig.height);
@@ -2615,6 +2613,13 @@ function getInputSummary(inputs: NodeGenerationInput[]) {
         textCount: inputs.filter((input) => input.type === "text").length,
         imageCount: inputs.filter((input) => input.type === "image").length,
     };
+}
+
+async function requestCanvasImage(config: AiConfig, prompt: string, references: ReferenceImage[]) {
+    const items = references.length ? await requestEdit(config, prompt, references) : await requestGeneration(config, prompt);
+    const image = items[0];
+    if (!image) throw new Error("接口没有返回图片");
+    return image;
 }
 
 function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefined, mode: CanvasNodeGenerationMode): AiConfig {
