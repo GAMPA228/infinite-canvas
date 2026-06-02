@@ -11,6 +11,80 @@ export type AdminPromptCategory = {
     remote: boolean;
 };
 
+export type AdminUser = {
+    id: string;
+    username: string;
+    email: string;
+    displayName: string;
+    avatarUrl: string;
+    role: "user" | "admin";
+    credits: number;
+    affCode: string;
+    affCount: number;
+    inviterId: string;
+    linuxDoId: string;
+    status: "active" | "ban";
+    lastLoginAt: string;
+    createdAt: string;
+    updatedAt: string;
+};
+
+export type AdminUserListResponse = {
+    items: AdminUser[];
+    total: number;
+};
+
+export type AdminCreditLog = {
+    id: string;
+    userId: string;
+    type: string;
+    amount: number;
+    balance: number;
+    relatedId: string;
+    remark: string;
+    extra: string;
+    createdAt: string;
+};
+
+export type AdminCreditLogListResponse = {
+    items: AdminCreditLog[];
+    total: number;
+};
+
+export type AdminUserQuery = {
+    keyword?: string;
+    page?: number;
+    pageSize?: number;
+};
+
+export async function fetchAdminUsers(token: string, query: AdminUserQuery = {}) {
+    return apiGet<AdminUserListResponse>("/api/admin/users", compactApiParams(query), token);
+}
+
+export async function saveAdminUser(token: string, user: Partial<AdminUser> & { password?: string }) {
+    return apiPost<AdminUser>("/api/admin/users", user, token);
+}
+
+export async function adjustAdminUserCredits(token: string, id: string, credits: number) {
+    return apiPost<AdminUser>(`/api/admin/users/${encodeURIComponent(id)}/credits`, { credits }, token);
+}
+
+export async function deleteAdminUser(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/users/${encodeURIComponent(id)}`, token);
+}
+
+export async function fetchAdminCreditLogs(token: string, query: AdminUserQuery = {}) {
+    return apiGet<AdminCreditLogListResponse>("/api/admin/credit-logs", compactApiParams(query), token);
+}
+
+export async function saveAdminCreditLog(token: string, log: Partial<AdminCreditLog>) {
+    return apiPost<AdminCreditLog>("/api/admin/credit-logs", log, token);
+}
+
+export async function deleteAdminCreditLog(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/credit-logs/${encodeURIComponent(id)}`, token);
+}
+
 export async function fetchAdminPromptCategories(token: string) {
     return apiGet<AdminPromptCategory[]>("/api/admin/prompt-categories", undefined, token);
 }
@@ -185,8 +259,19 @@ export type AdminPublicModelChannelSettings = {
     allowCustomChannel: boolean;
 };
 
+export type AdminModelCost = {
+    model: string;
+    credits: number;
+};
+
 export type AdminPublicSettings = {
     modelChannel: AdminPublicModelChannelSettings;
+    auth: {
+        allowRegister: boolean;
+        linuxDo: {
+            enabled: boolean;
+        };
+    };
 };
 
 export type AdminPrivateSettings = {
@@ -194,6 +279,12 @@ export type AdminPrivateSettings = {
     promptSync: {
         enabled: boolean;
         cron: string;
+    };
+    auth: {
+        linuxDo: {
+            clientId: string;
+            clientSecret: string;
+        };
     };
 };
 

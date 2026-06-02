@@ -17,6 +17,7 @@ export type CanvasProject = {
     chatSessions: CanvasAssistantSession[];
     activeChatId: string | null;
     backgroundMode: CanvasBackgroundMode;
+    showImageInfo: boolean;
     viewport: ViewportTransform;
 };
 
@@ -30,7 +31,7 @@ type CanvasStore = {
     openProject: (id: string) => CanvasProject | null;
     renameProject: (id: string, title: string) => void;
     deleteProjects: (ids: string[]) => void;
-    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "viewport">>) => void;
+    updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -86,6 +87,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     chatSessions: [],
                     activeChatId: null,
                     backgroundMode: "lines",
+                    showImageInfo: false,
                     viewport: initialViewport,
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));
@@ -105,6 +107,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     chatSessions: source.chatSessions || [],
                     activeChatId: source.activeChatId || null,
                     backgroundMode: source.backgroundMode || "lines",
+                    showImageInfo: source.showImageInfo || false,
                     viewport: source.viewport || initialViewport,
                 };
                 set((state) => ({ projects: [project, ...state.projects] }));

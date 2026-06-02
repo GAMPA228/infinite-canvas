@@ -18,8 +18,16 @@ func New() *gin.Engine {
 	})
 	api.POST("/auth/register", gin.WrapF(handler.Register))
 	api.POST("/auth/login", gin.WrapF(handler.Login))
+	api.GET("/auth/linux-do/authorize", gin.WrapF(handler.LinuxDoAuthorize))
+	api.GET("/auth/linux-do/callback", gin.WrapF(handler.LinuxDoCallback))
 	api.GET("/auth/me", middleware.OptionalAuth, gin.WrapF(handler.CurrentUser))
 	api.GET("/settings", middleware.OptionalAuth, gin.WrapF(handler.Settings))
+	api.GET("/media/references/:id", func(c *gin.Context) {
+		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
+	})
+	api.HEAD("/media/references/:id", func(c *gin.Context) {
+		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
+	})
 	api.POST("/v1/images/generations", middleware.OptionalAuth, gin.WrapF(handler.AIImagesGenerations))
 	api.POST("/v1/images/generations/async", middleware.OptionalAuth, gin.WrapF(handler.AIImagesGenerationsAsync))
 	api.POST("/v1/images/edits/async", middleware.OptionalAuth, gin.WrapF(handler.AIImagesEditsAsync))
@@ -30,6 +38,7 @@ func New() *gin.Engine {
 	api.POST("/v1/chat/completions", middleware.OptionalAuth, gin.WrapF(handler.AIChatCompletions))
 	api.POST("/v1/responses", middleware.OptionalAuth, gin.WrapF(handler.AIResponses))
 	api.POST("/v1/videos", middleware.OptionalAuth, gin.WrapF(handler.AIVideos))
+	api.POST("/v1/media/references", middleware.UserAuth, gin.WrapF(handler.UploadReferenceMedia))
 	api.GET("/v1/videos/:id", middleware.OptionalAuth, func(c *gin.Context) {
 		handler.AIVideo(c.Writer, c.Request, c.Param("id"))
 	})

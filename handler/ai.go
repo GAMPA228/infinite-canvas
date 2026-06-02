@@ -130,6 +130,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		FailError(w, err)
 		return
 	}
+	path = resolveAIProxyPath(channel.BaseURL, modelName, path)
 	request, err := http.NewRequest(http.MethodGet, service.BuildModelChannelURL(channel, path), nil)
 	if err != nil {
 		Fail(w, "AI 接口请求失败")
@@ -168,6 +169,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if path == "/images/generations" || path == "/images/edits" {
 		logAIImageRequest(channel.Name, channel.Mode, channel.SizeStrategy, modelName, body, contentType)
 	}
+	path = resolveAIProxyPath(channel.BaseURL, modelName, path)
 	targetURL := service.BuildModelChannelURL(channel, path)
 	isCodexImage := channel.Mode == "codex" && (path == "/images/generations" || path == "/images/edits")
 	request, err := http.NewRequest(http.MethodPost, targetURL, bytes.NewReader(body))
@@ -1788,6 +1790,25 @@ func readAIQuality(body []byte, contentType string) string {
 	}
 	_ = json.Unmarshal(body, &payload)
 	return payload.Quality
+}
+
+func resolveAIProxyPath(baseURL string, modelName string, path string) string {
+	if !isArkSeedanceVideo(baseURL, modelName) {
+		return path
+	}
+	if path == "/videos" {
+		return "/contents/generations/tasks"
+	}
+	if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+		return "/contents/generations/tasks/" + strings.TrimPrefix(path, "/videos/")
+	}
+	return path
+}
+
+func isArkSeedanceVideo(baseURL string, modelName string) bool {
+	base := strings.ToLower(baseURL)
+	model := strings.ToLower(modelName)
+	return strings.Contains(model, "seedance") || strings.Contains(model, "doubao-seedance") || strings.Contains(base, "/api/plan/v3")
 }
 
 var errMissingModel = &aiError{"缺少模型名称"}

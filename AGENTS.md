@@ -6,6 +6,7 @@
 
 - 先读现有代码，再动手修改，优先沿用项目已有结构和写法。
 - 写代码保持最少行数，能简单实现就不要引入复杂抽象。
+- 标准格式、协议、解析、压缩、加密、日期等通用能力优先使用成熟稳定的库，不要手写底层实现，除非用户明确要求或项目已有实现必须沿用。
 - 不要为了“兼容更多场景”写大量分支，只实现当前明确需要的功能。
 - 项目尚未上线，不需要兼容旧数据；表结构或字段调整时直接按新设计修改，不写旧字段兼容、数据迁移兜底或删除旧表的清理逻辑，除非用户明确要求。
 - 每次写完代码，不需要检查语法，不需要执行构建，用户会自己做。
@@ -59,20 +60,22 @@
 - 优先使用 `canvasThemes`、`useThemeStore` 或 Ant Design `ConfigProvider` token。
 - 不要硬编码黑白、stone、slate 等颜色导致浅色/深色主题不一致。
 - 新增画布按钮、弹窗、浮层时，尽量复用已有工具栏、节点面板、Modal 的视觉风格。
+- 画布顶部工具栏和状态信息优先采用极简扁平风格：无边框、无阴影、无胶囊背景，融入整体背景，弱化按钮感，仅保留轻微 hover 反馈，保持简洁现代、低视觉重量。
 - 图片节点尺寸逻辑要尊重原始比例，除非功能明确要求自由变形。
 - 批量生成、多图展示、助手面板等画布交互要尽量简洁，不要占用过多画布空间。
 
 ## 文档规范
 
 - README 保持简洁，只放项目介绍、核心功能、快速开始和文档入口。
-- 详细功能介绍写到 `docs/features.md`。
-- 后续待办写到 `docs/todo.md`。
-- 已实现但还需要用户测试确认的事项写到 `docs/pending-test.md`。
-- `docs/pending-test.md` 用来记录这个版本实际做了哪些可测试变更；`CHANGELOG.md` 的 `Unreleased` 只保留对这些变更的版本级归纳，避免逐条照搬实现细节。
-- 每次 todo 事项完成后，先从 `docs/todo.md` 移到 `docs/pending-test.md`，不要直接写进正式功能说明；用户确认测试通过后再更新 `docs/features.md`。
-- 每次任务完成前，都要根据实际变更检查并更新 `docs/todo.md` 和 `docs/pending-test.md`；如果功能或待办没有变化，也要确认无需修改。
-- 接口响应规则写到 `docs/api-response.md`。
-- 数据库结构写到 `docs/backend-database.md`。
+- `docs/index.md` 放给 AI 使用的文档索引，不要再放到 `docs/content/docs/` 内容目录里。
+- 详细功能介绍写到 `docs/content/docs/overview/features.mdx`。
+- 后续待办写到 `docs/content/docs/progress/todo.mdx`。
+- 已实现但还需要用户测试确认的事项写到 `docs/content/docs/progress/pending-test.mdx`。
+- `docs/content/docs/progress/pending-test.mdx` 用来记录这个版本实际做了哪些可测试变更；`CHANGELOG.md` 的 `Unreleased` 只保留对这些变更的版本级归纳，避免逐条照搬实现细节。
+- 每次 todo 事项完成后，先从 `docs/content/docs/progress/todo.mdx` 移到 `docs/content/docs/progress/pending-test.mdx`，不要直接写进正式功能说明；用户确认测试通过后再更新 `docs/content/docs/overview/features.mdx`。
+- 每次任务完成前，都要根据实际变更检查并更新 `docs/content/docs/progress/todo.mdx` 和 `docs/content/docs/progress/pending-test.mdx`；如果功能或待办没有变化，也要确认无需修改。
+- 接口响应规则写到 `docs/content/docs/backend/api-response.mdx`。
+- 数据库结构写到 `docs/content/docs/backend/backend-database.mdx`。
 - 文档不要写过期日期；除非用户明确要求记录具体时间。
 
 ## 发版本流程

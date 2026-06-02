@@ -7,6 +7,7 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -74,6 +75,9 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 	resolved, err := resolveAdminChannel(index, channel)
 	if err != nil {
 		return "", err
+	}
+	if isArkAgentPlanChannel(resolved) || isSeedanceModelName(modelName) {
+		return testArkSeedanceChannelModel(resolved, modelName)
 	}
 	return testAdminChannelModel(resolved, modelName)
 }
@@ -326,11 +330,42 @@ func SelectUserModelChannel(user model.AuthUser, modelName string) (model.ModelC
 }
 
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
-	baseURL := strings.TrimRight(channel.BaseURL, "/")
-	if !strings.HasSuffix(baseURL, "/v1") {
+	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
+	lowerBaseURL := strings.ToLower(baseURL)
+	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") {
 		baseURL += "/v1"
 	}
 	return baseURL + path
+}
+
+func normalizeModelChannelBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	parsed, err := url.Parse(baseURL)
+	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		path := strings.TrimRight(parsed.Path, "/")
+		lowerPath := strings.ToLower(path)
+		if index := strings.Index(lowerPath, "/api/plan/v3"); index >= 0 {
+			end := index + len("/api/plan/v3")
+			if len(lowerPath) == end || lowerPath[end] == '/' {
+				parsed.Path = path[:end]
+				parsed.RawPath = ""
+				parsed.RawQuery = ""
+				parsed.Fragment = ""
+				return strings.TrimRight(parsed.String(), "/")
+			}
+		}
+	}
+	return baseURL
+}
+
+func isArkAgentPlanChannel(channel model.ModelChannel) bool {
+	baseURL := strings.ToLower(normalizeModelChannelBaseURL(channel.BaseURL))
+	return strings.HasSuffix(baseURL, "/api/plan/v3")
+}
+
+func isSeedanceModelName(modelName string) bool {
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	return strings.Contains(modelName, "seedance") || strings.Contains(modelName, "doubao-seedance")
 }
 
 func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
@@ -455,6 +490,22 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 		return payload.Choices[0].Message.Content, nil
 	}
 	return "ok", nil
+}
+
+func testArkSeedanceChannelModel(channel model.ModelChannel, modelName string) (string, error) {
+	if strings.TrimSpace(modelName) == "" {
+		return "", errors.New("缺少模型名称")
+	}
+	if strings.TrimSpace(channel.BaseURL) == "" {
+		return "", settingsSafeMessageError{message: "缺少接口地址"}
+	}
+	if strings.TrimSpace(channel.APIKey) == "" {
+		return "", settingsSafeMessageError{message: "缺少 API Key"}
+	}
+	if !isArkAgentPlanChannel(channel) {
+		return "Seedance 视频模型不会发送 /chat/completions 文本测试。已检查 Base URL、API Key 和模型名非空；未调用视频生成接口，因此未验证套餐额度或模型权限。", nil
+	}
+	return "Agent Plan / Seedance 视频模型配置格式已通过。后台测试不会调用视频生成接口，因此未验证 API Key、套餐额度或模型权限；请在画布中使用视频生成验证。", nil
 }
 
 func readAdminChannelError(body []byte, statusCode int, fallback string) error {

@@ -7,6 +7,8 @@ export type UserRole = "guest" | "user" | "vip" | "admin";
 export type AuthUser = {
     id: string;
     username: string;
+    displayName: string;
+    avatarUrl: string;
     role: UserRole;
     credits: number;
     createdAt: string;
